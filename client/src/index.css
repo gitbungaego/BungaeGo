@@ -1,0 +1,125 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: oklch(0.99 0 0);
+  --color-foreground: oklch(0.13 0.02 270);
+  --color-card: oklch(1 0 0);
+  --color-card-foreground: oklch(0.13 0.02 270);
+  --color-popover: oklch(1 0 0);
+  --color-popover-foreground: oklch(0.13 0.02 270);
+  --color-primary: oklch(0.75 0.19 95);
+  --color-primary-foreground: oklch(0.13 0.02 270);
+  --color-secondary: oklch(0.96 0.01 270);
+  --color-secondary-foreground: oklch(0.35 0.04 270);
+  --color-muted: oklch(0.96 0.005 270);
+  --color-muted-foreground: oklch(0.55 0.02 270);
+  --color-accent: oklch(0.85 0.15 95);
+  --color-accent-foreground: oklch(0.13 0.02 270);
+  --color-destructive: oklch(0.57 0.22 27);
+  --color-destructive-foreground: oklch(0.99 0 0);
+  --color-border: oklch(0.91 0.01 270);
+  --color-input: oklch(0.91 0.01 270);
+  --color-ring: oklch(0.75 0.19 95);
+  --color-chart-1: oklch(0.75 0.19 95);
+  --color-chart-2: oklch(0.62 0.18 160);
+  --color-chart-3: oklch(0.72 0.15 60);
+  --color-chart-4: oklch(0.65 0.20 30);
+  --color-chart-5: oklch(0.55 0.18 320);
+  --color-sidebar: oklch(0.97 0.005 270);
+  --color-sidebar-foreground: oklch(0.13 0.02 270);
+  --color-sidebar-primary: oklch(0.75 0.19 95);
+  --color-sidebar-primary-foreground: oklch(0.13 0.02 270);
+  --color-sidebar-accent: oklch(0.85 0.15 95);
+  --color-sidebar-accent-foreground: oklch(0.75 0.19 95);
+  --color-sidebar-border: oklch(0.91 0.01 270);
+  --color-sidebar-ring: oklch(0.75 0.19 95);
+  --radius-lg: 0.75rem;
+  --radius-md: 0.5rem;
+  --radius-sm: 0.375rem;
+  --font-sans: "Pretendard Variable", "Pretendard", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold tracking-tight;
+  }
+}
+
+@layer utilities {
+  .container {
+    @apply mx-auto px-4 sm:px-6 lg:px-8 max-w-7xl;
+  }
+  .flex {
+    min-width: 0;
+    min-height: 0;
+  }
+
+  /* Elegant card hover effect */
+  .card-hover {
+    @apply transition-all duration-300 hover:shadow-lg hover:-translate-y-0.5;
+  }
+
+  /* Glass morphism */
+  .glass {
+    @apply bg-white/80 backdrop-blur-md border border-white/20;
+  }
+
+  /* Gradient text */
+  .gradient-text {
+    @apply bg-gradient-to-r from-primary to-yellow-300 bg-clip-text text-transparent;
+  }
+
+  /* Progress bar fill */
+  .progress-fill {
+    transition: width 0.6s cubic-bezier(0.23, 1, 0.32, 1);
+  }
+}
+
+/* Pretendard font */
+@font-face {
+  font-family: "Pretendard Variable";
+  font-weight: 45 920;
+  font-style: normal;
+  font-display: swap;
+  src: url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/packages/pretendard/dist/web/variable/pretendardvariable-dynamic-subset.woff2") format("woff2-variations");
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: oklch(0.75 0.01 270);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.60 0.02 270);
+}
+
+/* Button active scale */
+button:active:not(:disabled) {
+  transform: scale(0.97);
+  transition: transform 0.1s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+/* Smooth page transitions */
+.page-enter {
+  animation: pageEnter 0.25s cubic-bezier(0.23, 1, 0.32, 1);
+}
+@keyframes pageEnter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
