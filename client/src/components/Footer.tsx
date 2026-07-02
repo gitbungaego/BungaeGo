@@ -14,7 +14,7 @@ export default function Footer() {
               </span>
             </Link>
             <p className="text-xs text-muted-foreground max-w-xs">
-              이벤트 셔틀 크라우드소싱 플랫폼 — 함께 타면 더 저렴하고, 더 빠르게.
+              번개GO — 함께 타면 더 저렴하고, 더 빠르게.
             </p>
           </div>
           <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted-foreground">
