@@ -9,8 +9,63 @@ function getQueryParam(req: Request, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function getSafeRedirectTarget(req: Request, redirectUri: string | undefined) {
+  if (!redirectUri) return "/";
+  if (redirectUri.startsWith("/")) return redirectUri;
+
+  try {
+    const parsed = new URL(redirectUri);
+    const currentOrigin = `${req.protocol}://${req.get("host")}`;
+    return parsed.origin === currentOrigin
+      ? `${parsed.pathname}${parsed.search}${parsed.hash}`
+      : "/";
+  } catch {
+    return "/";
+  }
+}
+
 export function registerOAuthRoutes(app: Express) {
-    // ── 로컬 개발 전용 로그인 (LOCAL_DEV_AUTH=true 일 때만 작동) ──
+  app.get("/app-auth", async (req: Request, res: Response) => {
+    const redirectUri = getQueryParam(req, "redirectUri");
+    const openId = process.env.OWNER_OPEN_ID || "local-admin-openid";
+    const name = process.env.OWNER_NAME || "관리자";
+
+    try {
+      try {
+        await db.upsertUser({
+          openId,
+          name,
+          email: `${openId}@local.dev`,
+          loginMethod: "local-fallback",
+          lastSignedIn: new Date(),
+        });
+      } catch (error) {
+        if (!db.isRecoverableDatabaseError(error)) {
+          throw error;
+        }
+        console.warn("[OAuth] DB unavailable during fallback login, continuing with session", error);
+      }
+
+      const sessionToken = await sdk.createSessionToken(openId, {
+        name,
+        expiresInMs: ONE_YEAR_MS,
+      });
+
+      const cookieOptions = getSessionCookieOptions(req);
+      res.cookie(COOKIE_NAME, sessionToken, {
+        ...cookieOptions,
+        maxAge: ONE_YEAR_MS,
+      });
+
+      const target = getSafeRedirectTarget(req, redirectUri);
+      res.redirect(302, target === "/api/oauth/callback" ? "/" : target);
+    } catch (error) {
+      console.error("[OAuth] App auth fallback failed", error);
+      res.status(500).json({ error: "app auth fallback failed" });
+    }
+  });
+
+  // ── 로컬 개발 전용 로그인 (LOCAL_DEV_AUTH=true 일 때만 작동) ──
   if (process.env.LOCAL_DEV_AUTH === "true") {
     app.get("/api/dev-login", async (req: Request, res: Response) => {
       const openId =

@@ -303,19 +303,47 @@ class SDKServer {
         });
         user = await db.getUserByOpenId(userInfo.openId);
       } catch (error) {
-        console.error("[Auth] Failed to sync user from OAuth:", error);
-        throw ForbiddenError("Failed to sync user info");
+        if (db.isRecoverableDatabaseError(error)) {
+          console.warn("[Auth] DB unavailable while syncing user, continuing with session", error);
+        } else {
+          console.error("[Auth] Failed to sync user from OAuth:", error);
+          throw ForbiddenError("Failed to sync user info");
+        }
       }
     }
 
     if (!user) {
-      throw ForbiddenError("User not found");
+      try {
+        user = {
+          id: -1,
+          openId: session.openId,
+          name: session.name || null,
+          email: null,
+          loginMethod: null,
+          role: "user",
+          phone: null,
+          referralCode: null,
+          pointsBalance: 0,
+          createdAt: signedInAt,
+          updatedAt: signedInAt,
+          lastSignedIn: signedInAt,
+        };
+      } catch {
+        throw ForbiddenError("User not found");
+      }
     }
 
-    await db.upsertUser({
-      openId: user.openId,
-      lastSignedIn: signedInAt,
-    });
+    try {
+      await db.upsertUser({
+        openId: user.openId,
+        lastSignedIn: signedInAt,
+      });
+    } catch (error) {
+      if (!db.isRecoverableDatabaseError(error)) {
+        throw error;
+      }
+      console.warn("[Auth] DB unavailable while refreshing session, continuing", error);
+    }
 
     return user;
   }

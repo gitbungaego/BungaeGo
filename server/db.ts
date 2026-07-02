@@ -1,5 +1,6 @@
 import { and, desc, eq, gte, like, lte, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
+import { createPool, type PoolOptions } from "mysql2/promise";
 import {
   BoardingPoint,
   Event,
@@ -28,10 +29,62 @@ import { nanoid } from "nanoid";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
+export function isRecoverableDatabaseError(error: unknown): boolean {
+  if (!error) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  const text = message.toLowerCase();
+
+  const isMissingTable =
+    (text.includes("table") && text.includes("doesn't exist")) ||
+    text.includes("does not exist");
+  const isPermissionIssue =
+    text.includes("command denied") ||
+    text.includes("access denied");
+  const isConnectionIssue =
+    text.includes("econnreset") ||
+    text.includes("econnrefused") ||
+    text.includes("enotfound") ||
+    text.includes("getaddrinfo");
+
+  return isMissingTable || isPermissionIssue || isConnectionIssue || text.includes("ssl profile");
+}
+
+export function buildMysqlPoolConfig(databaseUrl: string): PoolOptions {
+  const parsed = new URL(databaseUrl);
+  const sslParam = parsed.searchParams.get("ssl");
+
+  let ssl: PoolOptions["ssl"] | undefined;
+  if (sslParam === "true" || sslParam === "1") {
+    ssl = { rejectUnauthorized: false };
+  } else if (sslParam === "false" || sslParam === "0") {
+    ssl = undefined;
+  } else if (sslParam) {
+    try {
+      ssl = JSON.parse(sslParam) as PoolOptions["ssl"];
+    } catch {
+      ssl = undefined;
+    }
+  }
+
+  return {
+    host: parsed.hostname,
+    port: parsed.port ? Number(parsed.port) : 3306,
+    user: decodeURIComponent(parsed.username),
+    password: decodeURIComponent(parsed.password),
+    database: parsed.pathname.replace(/^\/+/, ""),
+    ssl,
+    connectionLimit: 10,
+  };
+}
+
+function createMysqlDb(databaseUrl: string) {
+  return drizzle(createPool(buildMysqlPoolConfig(databaseUrl)));
+}
+
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      _db = createMysqlDb(process.env.DATABASE_URL);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
@@ -73,21 +126,44 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   if (!values.lastSignedIn) values.lastSignedIn = new Date();
   if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
 
-  await db.insert(users).values(values).onDuplicateKeyUpdate({ set: updateSet });
+  try {
+    await db.insert(users).values(values).onDuplicateKeyUpdate({ set: updateSet });
+  } catch (error) {
+    if (!isRecoverableDatabaseError(error)) {
+      throw error;
+    }
+    console.warn("[Database] Upsert skipped due to recoverable DB issue", error);
+  }
 }
 
 export async function getUserByOpenId(openId: string): Promise<User | undefined> {
   const db = await getDb();
   if (!db) return undefined;
-  const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
-  return result[0];
+  try {
+    const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
+    return result[0];
+  } catch (error) {
+    if (!isRecoverableDatabaseError(error)) {
+      throw error;
+    }
+    console.warn("[Database] User lookup skipped due to recoverable DB issue", error);
+    return undefined;
+  }
 }
 
 export async function getUserById(id: number): Promise<User | undefined> {
   const db = await getDb();
   if (!db) return undefined;
-  const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
-  return result[0];
+  try {
+    const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
+    return result[0];
+  } catch (error) {
+    if (!isRecoverableDatabaseError(error)) {
+      throw error;
+    }
+    console.warn("[Database] User lookup by id skipped due to recoverable DB issue", error);
+    return undefined;
+  }
 }
 
 export async function ensureReferralCode(userId: number): Promise<string> {
