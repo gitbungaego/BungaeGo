@@ -120,8 +120,8 @@ export default function CreatePage() {
     return (
       <div className="py-20 text-center space-y-4">
         <p className="text-muted-foreground">셔틀을 만들려면 로그인이 필요합니다.</p>
-        <Button asChild>
-          <a href={getLoginUrl()}>로그인</a>
+        <Button asChild className="bg-[#FEE500] hover:bg-[#FDD800] text-black">
+          <a href={getLoginUrl()}>카카오로 로그인</a>
         </Button>
       </div>
     );

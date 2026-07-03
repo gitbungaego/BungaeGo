@@ -173,10 +173,17 @@ export default function Home() {
             className="shadow-lg gap-2"
             asChild
           >
-            <Link href={isAuthenticated ? "/create" : getLoginUrl()}>
-              <Bus className="h-4 w-4" />
-              셔틀 만들기 시작
-            </Link>
+            {isAuthenticated ? (
+              <Link href="/create">
+                <Bus className="h-4 w-4" />
+                셔틀 만들기 시작
+              </Link>
+            ) : (
+              <a href={getLoginUrl()}>
+                <Bus className="h-4 w-4" />
+                셔틀 만들기 시작
+              </a>
+            )}
           </Button>
         </div>
       </section>

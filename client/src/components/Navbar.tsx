@@ -100,8 +100,12 @@ export default function Navbar() {
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : (
-              <Button variant="outline" size="sm" asChild>
-                <a href={getLoginUrl()}>로그인</a>
+              <Button
+                size="sm"
+                asChild
+                className="bg-[#FEE500] hover:bg-[#FDD800] text-black border-0"
+              >
+                <a href={getLoginUrl()}>카카오로 3초 로그인</a>
               </Button>
             )}
 
