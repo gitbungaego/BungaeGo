@@ -28,12 +28,14 @@ import {
   Bus,
   Calendar,
   CheckCircle2,
+  Route as RouteIcon,
   Shield,
   Ticket,
   Users,
   XCircle,
 } from "lucide-react";
 import { Link } from "wouter";
+import { MatchingTab } from "@/components/admin/MatchingTab";
 
 export default function AdminPage() {
   const { user, isAuthenticated, loading } = useAuth();
@@ -88,6 +90,10 @@ export default function AdminPage() {
               <Users className="h-3.5 w-3.5" />
               사용자
             </TabsTrigger>
+            <TabsTrigger value="matching" className="gap-1.5">
+              <RouteIcon className="h-3.5 w-3.5" />
+              배차 매칭
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="events" className="mt-4">
@@ -101,6 +107,9 @@ export default function AdminPage() {
           </TabsContent>
           <TabsContent value="users" className="mt-4">
             <UsersTab />
+          </TabsContent>
+          <TabsContent value="matching" className="mt-4">
+            <MatchingTab />
           </TabsContent>
         </Tabs>
       </div>
@@ -144,6 +153,13 @@ function EventsTab() {
   const updateStatus = trpc.events.updateStatus.useMutation({
     onSuccess: () => {
       toast.success("이벤트 상태가 업데이트되었습니다.");
+      utils.events.adminList.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+  const setAutoMatch = trpc.events.setAutoMatch.useMutation({
+    onSuccess: () => {
+      toast.success("자동 매칭 설정이 변경되었습니다.");
       utils.events.adminList.invalidate();
     },
     onError: (err) => toast.error(err.message),
@@ -207,6 +223,31 @@ function EventsTab() {
                       취소
                     </Button>
                   )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className={`text-xs h-7 ${event.autoMatchEnabled ? "text-blue-600 border-blue-300" : ""}`}
+                    disabled={setAutoMatch.isPending}
+                    onClick={() => {
+                      if (event.autoMatchEnabled) {
+                        setAutoMatch.mutate({ id: event.id, autoMatchEnabled: false });
+                        return;
+                      }
+                      const priceInput = window.prompt(
+                        "자동 매칭 좌석당 가격(원)을 입력하세요.",
+                        event.autoMatchPricePerSeat ? String(event.autoMatchPricePerSeat) : ""
+                      );
+                      if (!priceInput) return;
+                      const price = Number(priceInput);
+                      if (!Number.isFinite(price) || price < 0) {
+                        toast.error("올바른 가격을 입력하세요.");
+                        return;
+                      }
+                      setAutoMatch.mutate({ id: event.id, autoMatchEnabled: true, autoMatchPricePerSeat: price });
+                    }}
+                  >
+                    {event.autoMatchEnabled ? "자동매칭 끄기" : "자동매칭 켜기"}
+                  </Button>
                   <Button variant="ghost" size="sm" className="text-xs h-7" asChild>
                     <Link href={`/events/${event.id}`}>보기</Link>
                   </Button>

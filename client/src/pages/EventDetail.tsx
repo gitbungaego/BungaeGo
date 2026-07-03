@@ -151,6 +151,20 @@ export default function EventDetailPage({ id }: Props) {
           </div>
         </div>
 
+        {event.autoMatchEnabled && !event.matchingFrozenAt && (
+          <div className="rounded-xl border border-primary/30 bg-primary/5 p-5 mb-8 flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <p className="font-semibold">출발지·시간에 맞춰 자동으로 배차됩니다</p>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                참가 신청하면 비슷한 경로의 참가자와 함께 최적의 정류장·노선으로 매칭됩니다.
+              </p>
+            </div>
+            <Button asChild>
+              <Link href={`/events/${event.id}/join`}>참가 신청하기</Link>
+            </Button>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           {/* Trips */}
           <div className="lg:col-span-3 space-y-4">

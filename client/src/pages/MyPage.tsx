@@ -19,6 +19,7 @@ import {
   CheckCircle2,
   Copy,
   Gift,
+  Route as RouteIcon,
   Share2,
   Star,
   Ticket,
@@ -72,6 +73,10 @@ export default function MyPage() {
               <Ticket className="h-3.5 w-3.5" />
               예약 내역
             </TabsTrigger>
+            <TabsTrigger value="requests" className="flex-1 gap-1.5">
+              <RouteIcon className="h-3.5 w-3.5" />
+              참가 신청
+            </TabsTrigger>
             <TabsTrigger value="points" className="flex-1 gap-1.5">
               <Star className="h-3.5 w-3.5" />
               포인트
@@ -84,6 +89,9 @@ export default function MyPage() {
 
           <TabsContent value="reservations">
             <ReservationsTab />
+          </TabsContent>
+          <TabsContent value="requests">
+            <RideRequestsTab />
           </TabsContent>
           <TabsContent value="points">
             <PointsTab />
@@ -194,6 +202,113 @@ function ReservationCard({ reservation, onCancel, cancelling }: { reservation: a
           >
             <XCircle className="h-3.5 w-3.5 mr-1" />
             예약 취소
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const REQUEST_STATUS_LABELS: Record<string, string> = {
+  pending: "매칭 대기 중",
+  clustered: "매칭 진행 중",
+  route_confirmed: "배차 확정!",
+  boarded: "탑승 완료",
+  failed_refunded: "매칭 실패 (환불됨)",
+};
+
+const REQUEST_STATUS_COLORS: Record<string, string> = {
+  pending: "bg-amber-50 text-amber-600 border-amber-200",
+  clustered: "bg-blue-50 text-blue-600 border-blue-200",
+  route_confirmed: "bg-emerald-50 text-emerald-600 border-emerald-200",
+  boarded: "bg-emerald-50 text-emerald-600 border-emerald-200",
+  failed_refunded: "bg-red-50 text-red-500 border-red-200",
+};
+
+function RideRequestsTab() {
+  const { data: requests, isLoading } = trpc.rideRequests.myList.useQuery();
+  const utils = trpc.useUtils();
+
+  const cancelRequest = trpc.rideRequests.cancel.useMutation({
+    onSuccess: () => {
+      toast.success("참가 신청이 취소되었습니다.");
+      utils.rideRequests.myList.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        {[1, 2].map((i) => <Skeleton key={i} className="h-28 rounded-xl" />)}
+      </div>
+    );
+  }
+
+  if (!requests || requests.length === 0) {
+    return (
+      <div className="text-center py-16 text-muted-foreground">
+        <RouteIcon className="h-10 w-10 mx-auto mb-3 opacity-20" />
+        <p className="font-medium">참가 신청 내역이 없습니다</p>
+        <Button variant="outline" size="sm" className="mt-4" asChild>
+          <Link href="/events">이벤트 보러 가기</Link>
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {requests.map((req) => (
+        <RideRequestCard
+          key={req.id}
+          request={req}
+          onCancel={(id) => cancelRequest.mutate({ id })}
+          cancelling={cancelRequest.isPending}
+        />
+      ))}
+    </div>
+  );
+}
+
+function RideRequestCard({ request, onCancel, cancelling }: { request: any; onCancel: (id: number) => void; cancelling: boolean }) {
+  const { data: event } = trpc.events.byId.useQuery({ id: request.eventId });
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="min-w-0">
+          <p className="font-semibold text-sm truncate">{event?.title ?? "이벤트 로딩 중..."}</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            신청 #{request.id} · {request.seats}명
+          </p>
+        </div>
+        <Badge variant="outline" className={`text-xs border flex-shrink-0 ${REQUEST_STATUS_COLORS[request.status] ?? ""}`}>
+          {REQUEST_STATUS_LABELS[request.status] ?? request.status}
+        </Badge>
+      </div>
+
+      <div className="flex items-center justify-between text-sm">
+        <div className="flex items-center gap-3 text-muted-foreground text-xs">
+          <span className="flex items-center gap-1">
+            <Calendar className="h-3 w-3" />
+            {formatDateTime(request.targetArrivalAt)}
+          </span>
+        </div>
+        <span className="font-bold text-primary">{formatPrice(request.totalAmount)}</span>
+      </div>
+
+      {request.status === "pending" && (
+        <div className="mt-3 pt-3 border-t border-border/60 flex justify-end">
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-destructive border-destructive/30 hover:bg-destructive/5 text-xs"
+            onClick={() => onCancel(request.id)}
+            disabled={cancelling}
+          >
+            <XCircle className="h-3.5 w-3.5 mr-1" />
+            신청 취소
           </Button>
         </div>
       )}

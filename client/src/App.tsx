@@ -11,6 +11,8 @@ import EventsPage from "./pages/Events";
 import EventDetailPage from "./pages/EventDetail";
 import BookingPage from "./pages/Booking";
 import BookingConfirmPage from "./pages/BookingConfirm";
+import RequestJoinPage from "./pages/RequestJoin";
+import RequestJoinConfirmPage from "./pages/RequestJoinConfirm";
 import CreatePage from "./pages/Create";
 import MyPage from "./pages/MyPage";
 import AdminPage from "./pages/Admin";
@@ -40,6 +42,12 @@ function Router() {
       </Route>
       <Route path="/reservations/:id/confirm">
         {(params) => <Layout><BookingConfirmPage reservationId={Number(params.id)} /></Layout>}
+      </Route>
+      <Route path="/events/:id/join">
+        {(params) => <Layout><RequestJoinPage eventId={Number(params.id)} /></Layout>}
+      </Route>
+      <Route path="/requests/:id/confirm">
+        {(params) => <Layout><RequestJoinConfirmPage requestId={Number(params.id)} /></Layout>}
       </Route>
       <Route path="/create">
         <Layout><CreatePage /></Layout>

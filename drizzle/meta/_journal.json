@@ -15,6 +15,13 @@
       "when": 1782829543173,
       "tag": "0001_mysterious_betty_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1783020585873,
+      "tag": "0002_flippant_firedrake",
+      "breakpoints": true
     }
   ]
 }
