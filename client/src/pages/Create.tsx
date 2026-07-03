@@ -1,7 +1,7 @@
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
+import { MapView } from "@/components/Map";
 import { CATEGORY_LABELS } from "@/lib/constants";
 import {
   ArrowLeft,
@@ -21,6 +22,7 @@ import {
   MapPin,
   Minus,
   Plus,
+  Search,
   Ticket,
   Users,
 } from "lucide-react";
@@ -53,9 +55,48 @@ export default function CreatePage() {
   const [eventTime, setEventTime] = useState("19:00");
   const [venue, setVenue] = useState("");
   const [address, setAddress] = useState("");
+  const [lat, setLat] = useState<number | null>(null);
+  const [lng, setLng] = useState<number | null>(null);
   const [description, setDescription] = useState("");
   const [imageUrl, setImageUrl] = useState("");
-  const [organizerName, setOrganizerName] = useState("");
+
+  const placeInputRef = useRef<HTMLInputElement>(null);
+  const [map, setMap] = useState<google.maps.Map | null>(null);
+  const [placeMarker, setPlaceMarker] = useState<google.maps.marker.AdvancedMarkerElement | null>(null);
+
+  useEffect(() => {
+    if (!map || !placeInputRef.current || !window.google?.maps?.places) return;
+
+    const autocomplete = new window.google.maps.places.Autocomplete(placeInputRef.current, {
+      fields: ["name", "formatted_address", "geometry"],
+    });
+
+    const listener = autocomplete.addListener("place_changed", () => {
+      const place = autocomplete.getPlace();
+      const location = place.geometry?.location;
+      if (!location) return;
+
+      const placeLat = location.lat();
+      const placeLng = location.lng();
+      setVenue(place.name || place.formatted_address || "");
+      setAddress(place.formatted_address || "");
+      setLat(placeLat);
+      setLng(placeLng);
+
+      map.setCenter({ lat: placeLat, lng: placeLng });
+      map.setZoom(16);
+      if (placeMarker) placeMarker.map = null;
+      setPlaceMarker(
+        new window.google.maps.marker.AdvancedMarkerElement({
+          map,
+          position: { lat: placeLat, lng: placeLng },
+        })
+      );
+    });
+
+    return () => listener.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map]);
 
   // Step 2: Trip settings
   const [minCount, setMinCount] = useState(20);
@@ -66,10 +107,8 @@ export default function CreatePage() {
   const [isRoundTrip, setIsRoundTrip] = useState(true);
   const [notes, setNotes] = useState("");
 
-  // Step 3: Boarding points
-  const [boardingPoints, setBoardingPoints] = useState<BoardingPointInput[]>([
-    { name: "", address: "", pickupTime: "" },
-  ]);
+  // Step 3: Boarding points (optional)
+  const [boardingPoints, setBoardingPoints] = useState<BoardingPointInput[]>([]);
 
   const createEvent = trpc.events.create.useMutation();
   const createTrip = trpc.trips.create.useMutation();
@@ -89,7 +128,6 @@ export default function CreatePage() {
   const canProceed = () => {
     if (step === 1) return title.length >= 2 && eventDate && venue.length >= 2;
     if (step === 2) return minCount > 0 && maxCount >= minCount && price >= 0 && departureDate;
-    if (step === 3) return boardingPoints.every((bp) => bp.name.length > 0);
     return true;
   };
 
@@ -102,9 +140,10 @@ export default function CreatePage() {
         eventDate: eventDateMs,
         venue,
         address: address || undefined,
+        lat: lat !== null ? String(lat) : undefined,
+        lng: lng !== null ? String(lng) : undefined,
         imageUrl: imageUrl || undefined,
         description: description || undefined,
-        organizerName: organizerName || undefined,
       });
 
       const departureMs = new Date(`${departureDate}T${departureTime}`).getTime();
@@ -224,23 +263,38 @@ export default function CreatePage() {
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label>공연장 *</Label>
-                <Input value={venue} onChange={(e) => setVenue(e.target.value)} placeholder="예: 잠실종합운동장 주경기장" />
+                <Label>공연장 / 장소 *</Label>
+                <div className="relative">
+                  <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    ref={placeInputRef}
+                    defaultValue={venue}
+                    onChange={(e) => setVenue(e.target.value)}
+                    placeholder="장소명이나 주소를 검색하세요 (예: 잠실종합운동장)"
+                    className="pl-9"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">검색 결과를 선택하면 주소가 자동으로 입력됩니다.</p>
+                <div className="rounded-lg overflow-hidden border border-border h-40 mt-2">
+                  <MapView
+                    initialCenter={lat && lng ? { lat, lng } : { lat: 37.5665, lng: 126.978 }}
+                    initialZoom={lat && lng ? 15 : 10}
+                    onMapReady={(m) => setMap(m)}
+                  />
+                </div>
+                {address && (
+                  <p className="text-xs text-emerald-600 flex items-center gap-1">
+                    <MapPin className="h-3.5 w-3.5" />
+                    {address}
+                  </p>
+                )}
               </div>
               <div className="space-y-1.5">
-                <Label>주소</Label>
-                <Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="예: 서울특별시 송파구 올림픽로 25" />
-              </div>
-              <div className="space-y-1.5">
-                <Label>이미지 URL</Label>
+                <Label>이미지 URL (선택)</Label>
                 <Input value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder="https://..." />
               </div>
               <div className="space-y-1.5">
-                <Label>주최자</Label>
-                <Input value={organizerName} onChange={(e) => setOrganizerName(e.target.value)} placeholder="예: KAKAO ENT" />
-              </div>
-              <div className="space-y-1.5">
-                <Label>설명</Label>
+                <Label>설명 (선택)</Label>
                 <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="이벤트에 대한 간략한 설명을 입력하세요." rows={3} />
               </div>
             </div>
@@ -323,8 +377,10 @@ export default function CreatePage() {
           {/* Step 3: Boarding Points */}
           {step === 3 && (
             <div className="space-y-4">
-              <h2 className="text-lg font-semibold">탑승 포인트</h2>
-              <p className="text-sm text-muted-foreground">승객들이 탑승할 수 있는 포인트를 추가하세요.</p>
+              <h2 className="text-lg font-semibold">탑승 포인트 (선택)</h2>
+              <p className="text-sm text-muted-foreground">
+                지금 등록하지 않아도 셔틀을 개설할 수 있어요. 나중에 언제든 추가할 수 있습니다.
+              </p>
               <div className="space-y-3">
                 {boardingPoints.map((bp, idx) => (
                   <div key={idx} className="p-4 rounded-xl border border-border space-y-3">
