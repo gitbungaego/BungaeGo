@@ -1,7 +1,7 @@
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
-import { MapView } from "@/components/Map";
+import { MapView, searchKeyword, type KakaoPlaceResult } from "@/components/Map";
 import { formatPrice, formatDateTime } from "@/lib/constants";
 import { ArrowLeft, ArrowRight, CheckCircle2, MapPin, Minus, Plus, Search } from "lucide-react";
 import { Link } from "wouter";
@@ -33,9 +33,10 @@ export default function RequestJoinPage({ eventId }: Props) {
   const [originAddress, setOriginAddress] = useState("");
   const [originLat, setOriginLat] = useState<number | null>(null);
   const [originLng, setOriginLng] = useState<number | null>(null);
-  const [map, setMap] = useState<google.maps.Map | null>(null);
-  const [marker, setMarker] = useState<google.maps.marker.AdvancedMarkerElement | null>(null);
-  const [geocoding, setGeocoding] = useState(false);
+  const [map, setMap] = useState<any>(null);
+  const [marker, setMarker] = useState<any>(null);
+  const [placeResults, setPlaceResults] = useState<KakaoPlaceResult[]>([]);
+  const [showPlaceDropdown, setShowPlaceDropdown] = useState(false);
 
   const [targetArrivalDate, setTargetArrivalDate] = useState("");
   const [targetArrivalTime, setTargetArrivalTime] = useState("");
@@ -95,33 +96,36 @@ export default function RequestJoinPage({ eventId }: Props) {
   const maxPointsUsable = Math.min(pointsBalance?.balance ?? 0, totalBeforePoints);
   const totalAmount = totalBeforePoints - pointsUsed;
 
-  const handleSearchAddress = () => {
-    if (!originAddress || !window.google) return;
-    setGeocoding(true);
-    const geocoder = new window.google.maps.Geocoder();
-    geocoder.geocode({ address: originAddress }, (results, status) => {
-      setGeocoding(false);
-      if (status === "OK" && results && results[0]) {
-        const loc = results[0].geometry.location;
-        const lat = loc.lat();
-        const lng = loc.lng();
-        setOriginLat(lat);
-        setOriginLng(lng);
+  // Debounced keyword search-as-you-type (Kakao has no plug-and-play
+  // autocomplete widget, so we build a simple dropdown).
+  useEffect(() => {
+    if (!originAddress.trim()) {
+      setPlaceResults([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      const results = await searchKeyword(originAddress);
+      setPlaceResults(results);
+      setShowPlaceDropdown(true);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [originAddress]);
 
-        if (map) {
-          map.setCenter({ lat, lng });
-          map.setZoom(15);
-          marker?.map && (marker.map = null);
-          const newMarker = new window.google.maps.marker.AdvancedMarkerElement({
-            map,
-            position: { lat, lng },
-          });
-          setMarker(newMarker);
-        }
-      } else {
-        toast.error("주소를 찾을 수 없습니다. 다시 시도해주세요.");
-      }
-    });
+  const selectPlace = (place: KakaoPlaceResult) => {
+    const lat = Number(place.y);
+    const lng = Number(place.x);
+    setOriginAddress(place.road_address_name || place.address_name || place.place_name);
+    setOriginLat(lat);
+    setOriginLng(lng);
+    setShowPlaceDropdown(false);
+
+    if (map && window.kakao) {
+      const position = new window.kakao.maps.LatLng(lat, lng);
+      map.setCenter(position);
+      map.setLevel(3);
+      if (marker) marker.setMap(null);
+      setMarker(new window.kakao.maps.Marker({ map, position }));
+    }
   };
 
   const targetArrivalMs = () => {
@@ -214,17 +218,33 @@ export default function RequestJoinPage({ eventId }: Props) {
             <div className="space-y-4">
               <h2 className="text-lg font-semibold">출발지 입력</h2>
               <p className="text-sm text-muted-foreground">가까운 정류장이 배정될 수 있도록 출발 주소를 입력해주세요.</p>
-              <div className="flex gap-2">
+              <div className="relative">
+                <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={originAddress}
                   onChange={(e) => setOriginAddress(e.target.value)}
-                  placeholder="예: 서울시 강남구 테헤란로 123"
-                  onKeyDown={(e) => e.key === "Enter" && handleSearchAddress()}
+                  onFocus={() => placeResults.length > 0 && setShowPlaceDropdown(true)}
+                  onBlur={() => setTimeout(() => setShowPlaceDropdown(false), 150)}
+                  placeholder="예: 강남역, 서울시 강남구 테헤란로 123"
+                  className="pl-9"
                 />
-                <Button onClick={handleSearchAddress} disabled={geocoding || !originAddress} className="flex-shrink-0 gap-1.5">
-                  <Search className="h-4 w-4" />
-                  검색
-                </Button>
+                {showPlaceDropdown && placeResults.length > 0 && (
+                  <div className="absolute z-10 mt-1 w-full rounded-lg border border-border bg-card shadow-lg max-h-56 overflow-auto">
+                    {placeResults.map((place) => (
+                      <button
+                        key={place.id}
+                        type="button"
+                        onMouseDown={() => selectPlace(place)}
+                        className="w-full text-left px-3 py-2 hover:bg-muted transition-colors border-b border-border/60 last:border-0"
+                      >
+                        <p className="text-sm font-medium">{place.place_name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {place.road_address_name || place.address_name}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="rounded-xl overflow-hidden border border-border h-64">
                 <MapView

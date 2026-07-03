@@ -36,23 +36,15 @@ export default function EventDetailPage({ id }: Props) {
     { enabled: !!selectedTrip }
   );
 
-  const handleMapReady = useCallback((map: google.maps.Map) => {
+  const handleMapReady = useCallback((map: any) => {
     setMapReady(true);
-    if (boardingPoints && boardingPoints.length > 0) {
+    if (boardingPoints && boardingPoints.length > 0 && window.kakao) {
       boardingPoints.forEach((bp) => {
         if (bp.lat && bp.lng) {
-          new google.maps.Marker({
-            position: { lat: Number(bp.lat), lng: Number(bp.lng) },
+          new window.kakao.maps.Marker({
+            position: new window.kakao.maps.LatLng(Number(bp.lat), Number(bp.lng)),
             map,
             title: bp.name,
-            icon: {
-              path: google.maps.SymbolPath.CIRCLE,
-              scale: 8,
-              fillColor: "#5B4DFF",
-              fillOpacity: 1,
-              strokeColor: "#fff",
-              strokeWeight: 2,
-            },
           });
         }
       });

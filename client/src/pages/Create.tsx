@@ -1,7 +1,7 @@
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
-import { MapView } from "@/components/Map";
+import { MapView, searchKeyword, type KakaoPlaceResult } from "@/components/Map";
 import { CATEGORY_LABELS } from "@/lib/constants";
 import {
   ArrowLeft,
@@ -60,43 +60,45 @@ export default function CreatePage() {
   const [description, setDescription] = useState("");
   const [imageUrl, setImageUrl] = useState("");
 
-  const placeInputRef = useRef<HTMLInputElement>(null);
-  const [map, setMap] = useState<google.maps.Map | null>(null);
-  const [placeMarker, setPlaceMarker] = useState<google.maps.marker.AdvancedMarkerElement | null>(null);
+  const [map, setMap] = useState<any>(null);
+  const [placeMarker, setPlaceMarker] = useState<any>(null);
+  const [placeQuery, setPlaceQuery] = useState("");
+  const [placeResults, setPlaceResults] = useState<KakaoPlaceResult[]>([]);
+  const [showPlaceDropdown, setShowPlaceDropdown] = useState(false);
 
+  // Debounced keyword search-as-you-type (Kakao has no plug-and-play
+  // autocomplete widget like Google's, so we build a simple dropdown).
   useEffect(() => {
-    if (!map || !placeInputRef.current || !window.google?.maps?.places) return;
+    if (!placeQuery.trim()) {
+      setPlaceResults([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      const results = await searchKeyword(placeQuery);
+      setPlaceResults(results);
+      setShowPlaceDropdown(true);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [placeQuery]);
 
-    const autocomplete = new window.google.maps.places.Autocomplete(placeInputRef.current, {
-      fields: ["name", "formatted_address", "geometry"],
-    });
+  const selectPlace = (place: KakaoPlaceResult) => {
+    const placeLat = Number(place.y);
+    const placeLng = Number(place.x);
+    setVenue(place.place_name);
+    setAddress(place.road_address_name || place.address_name);
+    setLat(placeLat);
+    setLng(placeLng);
+    setPlaceQuery(place.place_name);
+    setShowPlaceDropdown(false);
 
-    const listener = autocomplete.addListener("place_changed", () => {
-      const place = autocomplete.getPlace();
-      const location = place.geometry?.location;
-      if (!location) return;
-
-      const placeLat = location.lat();
-      const placeLng = location.lng();
-      setVenue(place.name || place.formatted_address || "");
-      setAddress(place.formatted_address || "");
-      setLat(placeLat);
-      setLng(placeLng);
-
-      map.setCenter({ lat: placeLat, lng: placeLng });
-      map.setZoom(16);
-      if (placeMarker) placeMarker.map = null;
-      setPlaceMarker(
-        new window.google.maps.marker.AdvancedMarkerElement({
-          map,
-          position: { lat: placeLat, lng: placeLng },
-        })
-      );
-    });
-
-    return () => listener.remove();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [map]);
+    if (map && window.kakao) {
+      const position = new window.kakao.maps.LatLng(placeLat, placeLng);
+      map.setCenter(position);
+      map.setLevel(3);
+      if (placeMarker) placeMarker.setMap(null);
+      setPlaceMarker(new window.kakao.maps.Marker({ map, position }));
+    }
+  };
 
   // Step 2: Trip settings
   const [minCount, setMinCount] = useState(20);
@@ -267,12 +269,33 @@ export default function CreatePage() {
                 <div className="relative">
                   <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                   <Input
-                    ref={placeInputRef}
-                    defaultValue={venue}
-                    onChange={(e) => setVenue(e.target.value)}
+                    value={placeQuery}
+                    onChange={(e) => {
+                      setPlaceQuery(e.target.value);
+                      setVenue(e.target.value);
+                    }}
+                    onFocus={() => placeResults.length > 0 && setShowPlaceDropdown(true)}
+                    onBlur={() => setTimeout(() => setShowPlaceDropdown(false), 150)}
                     placeholder="장소명이나 주소를 검색하세요 (예: 잠실종합운동장)"
                     className="pl-9"
                   />
+                  {showPlaceDropdown && placeResults.length > 0 && (
+                    <div className="absolute z-10 mt-1 w-full rounded-lg border border-border bg-card shadow-lg max-h-56 overflow-auto">
+                      {placeResults.map((place) => (
+                        <button
+                          key={place.id}
+                          type="button"
+                          onMouseDown={() => selectPlace(place)}
+                          className="w-full text-left px-3 py-2 hover:bg-muted transition-colors border-b border-border/60 last:border-0"
+                        >
+                          <p className="text-sm font-medium">{place.place_name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {place.road_address_name || place.address_name}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <p className="text-xs text-muted-foreground">검색 결과를 선택하면 주소가 자동으로 입력됩니다.</p>
                 <div className="rounded-lg overflow-hidden border border-border h-40 mt-2">

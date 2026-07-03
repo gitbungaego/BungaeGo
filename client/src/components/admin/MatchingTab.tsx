@@ -19,7 +19,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { MapView } from "@/components/Map";
+import { MapView, createDotMarker } from "@/components/Map";
 import { formatDateTime, formatPrice } from "@/lib/constants";
 import { ChevronDown, Route, Snowflake } from "lucide-react";
 
@@ -304,36 +304,24 @@ function PreviewResult({
   preview: PreviewOutput;
   venue?: { lat: number; lng: number };
 }) {
-  const mapRef = useRef<google.maps.Map | null>(null);
-  const overlaysRef = useRef<Array<google.maps.marker.AdvancedMarkerElement | google.maps.Polyline>>([]);
+  const mapRef = useRef<any>(null);
+  const overlaysRef = useRef<any[]>([]);
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !window.google) return;
+    if (!map || !window.kakao) return;
 
-    overlaysRef.current.forEach((o) => {
-      if ("setMap" in o) o.setMap(null);
-    });
+    overlaysRef.current.forEach((o) => o.setMap(null));
     overlaysRef.current = [];
 
-    const clusterColorByRequestId = new Map<number, string>();
     preview.clusters.forEach((c, idx) => {
-      const color = CLUSTER_COLORS[idx % CLUSTER_COLORS.length];
-      c.memberRequestIds.forEach((id) => clusterColorByRequestId.set(id, color));
-
-      const pin = document.createElement("div");
-      pin.style.width = "12px";
-      pin.style.height = "12px";
-      pin.style.borderRadius = "50%";
-      pin.style.background = c.status === "failed" ? "#9ca3af" : color;
-      pin.style.border = "2px solid white";
-
-      const marker = new window.google.maps.marker.AdvancedMarkerElement({
+      const color = c.status === "failed" ? "#9ca3af" : CLUSTER_COLORS[idx % CLUSTER_COLORS.length];
+      const marker = createDotMarker(
         map,
-        position: { lat: c.assignedLat, lng: c.assignedLng },
-        content: pin,
-        title: `${c.status} (${c.memberRequestIds.length}명)`,
-      });
+        { lat: c.assignedLat, lng: c.assignedLng },
+        color,
+        `${c.status} (${c.memberRequestIds.length}명)`
+      );
       overlaysRef.current.push(marker);
     });
 
@@ -343,22 +331,22 @@ function PreviewResult({
       venuePin.style.height = "16px";
       venuePin.style.background = "#111827";
       venuePin.style.borderRadius = "3px";
-      const venueMarker = new window.google.maps.marker.AdvancedMarkerElement({
+      const venueMarker = new window.kakao.maps.CustomOverlay({
         map,
-        position: venue,
+        position: new window.kakao.maps.LatLng(venue.lat, venue.lng),
         content: venuePin,
-        title: "행사장",
+        yAnchor: 0.5,
       });
       overlaysRef.current.push(venueMarker);
     }
 
     preview.routes.forEach((route, idx) => {
-      const path = [...route.stops]
+      const stopPath = [...route.stops]
         .sort((a, b) => a.order - b.order)
-        .map((s) => ({ lat: s.lat, lng: s.lng }));
-      if (venue) path.push(venue);
+        .map((s) => new window.kakao.maps.LatLng(s.lat, s.lng));
+      const path = venue ? [...stopPath, new window.kakao.maps.LatLng(venue.lat, venue.lng)] : stopPath;
 
-      const polyline = new window.google.maps.Polyline({
+      const polyline = new window.kakao.maps.Polyline({
         path,
         map,
         strokeColor: CLUSTER_COLORS[idx % CLUSTER_COLORS.length],

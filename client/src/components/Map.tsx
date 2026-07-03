@@ -1,80 +1,38 @@
 /**
- * GOOGLE MAPS FRONTEND INTEGRATION - ESSENTIAL GUIDE
+ * KAKAO MAPS FRONTEND INTEGRATION - ESSENTIAL GUIDE
  *
  * USAGE FROM PARENT COMPONENT:
  * ======
  *
- * const mapRef = useRef<google.maps.Map | null>(null);
+ * const mapRef = useRef<any>(null);
  *
  * <MapView
- *   initialCenter={{ lat: 40.7128, lng: -74.0060 }}
- *   initialZoom={15}
+ *   initialCenter={{ lat: 37.5665, lng: 126.978 }}
+ *   initialZoom={12}
  *   onMapReady={(map) => {
- *     mapRef.current = map; // Store to control map from parent anytime, google map itself is in charge of the re-rendering, not react state.
+ *     mapRef.current = map; // kakao.maps.Map instance
+ *   }}
  * </MapView>
  *
  * ======
- * Available Libraries and Core Features:
- * -------------------------------
- * 📍 MARKER (from `marker` library)
- * - Attaches to map using { map, position }
- * new google.maps.marker.AdvancedMarkerElement({
- *   map,
- *   position: { lat: 37.7749, lng: -122.4194 },
- *   title: "San Francisco",
- * });
+ * Kakao Maps has no official TS types in this project, so `window.kakao` and
+ * map/marker instances are typed loosely (`any`). Core pieces used here:
  *
- * -------------------------------
- * 🏢 PLACES (from `places` library)
- * - Does not attach directly to map; use data with your map manually.
- * const place = new google.maps.places.Place({ id: PLACE_ID });
- * await place.fetchFields({ fields: ["displayName", "location"] });
- * map.setCenter(place.location);
- * new google.maps.marker.AdvancedMarkerElement({ map, position: place.location });
+ * 📍 MARKER
+ * new kakao.maps.Marker({ map, position: new kakao.maps.LatLng(lat, lng) });
  *
- * -------------------------------
- * 🧭 GEOCODER (from `geocoding` library)
- * - Standalone service; manually apply results to map.
- * const geocoder = new google.maps.Geocoder();
- * geocoder.geocode({ address: "New York" }, (results, status) => {
- *   if (status === "OK" && results[0]) {
- *     map.setCenter(results[0].geometry.location);
- *     new google.maps.marker.AdvancedMarkerElement({
- *       map,
- *       position: results[0].geometry.location,
- *     });
- *   }
- * });
+ * 🔍 PLACE KEYWORD SEARCH (requires `libraries=services`)
+ * const places = new kakao.maps.services.Places();
+ * places.keywordSearch("강남역", (data, status) => { ... data[0].x/.y, .place_name, .address_name });
+ * Use the exported `searchKeyword()` helper below instead of calling this directly.
  *
- * -------------------------------
- * 📐 GEOMETRY (from `geometry` library)
- * - Pure utility functions; not attached to map.
- * const dist = google.maps.geometry.spherical.computeDistanceBetween(p1, p2);
+ * 🧭 ADDRESS GEOCODING
+ * const geocoder = new kakao.maps.services.Geocoder();
+ * geocoder.addressSearch("서울 강남구 ...", (result, status) => { ... result[0].x/.y });
  *
- * -------------------------------
- * 🛣️ ROUTES (from `routes` library)
- * - Combines DirectionsService (standalone) + DirectionsRenderer (map-attached)
- * const directionsService = new google.maps.DirectionsService();
- * const directionsRenderer = new google.maps.DirectionsRenderer({ map });
- * directionsService.route(
- *   { origin, destination, travelMode: "DRIVING" },
- *   (res, status) => status === "OK" && directionsRenderer.setDirections(res)
- * );
- *
- * -------------------------------
- * 🌦️ MAP LAYERS (attach directly to map)
- * - new google.maps.TrafficLayer().setMap(map);
- * - new google.maps.TransitLayer().setMap(map);
- * - new google.maps.BicyclingLayer().setMap(map);
- *
- * -------------------------------
- * ✅ SUMMARY
- * - “map-attached” → AdvancedMarkerElement, DirectionsRenderer, Layers.
- * - “standalone” → Geocoder, DirectionsService, DistanceMatrixService, ElevationService.
- * - “data-only” → Place, Geometry utilities.
+ * 🛣️ POLYLINE
+ * new kakao.maps.Polyline({ map, path: [new kakao.maps.LatLng(lat,lng), ...], strokeColor: "#2563eb" });
  */
-
-/// <reference types="@types/google.maps" />
 
 import { useEffect, useRef } from "react";
 import { usePersistFn } from "@/hooks/usePersistFn";
@@ -82,54 +40,70 @@ import { cn } from "@/lib/utils";
 
 declare global {
   interface Window {
-    google?: typeof google;
+    kakao?: any;
   }
 }
 
-// Calls the Google Maps JavaScript API directly. This used to go through a
-// Manus-hosted proxy (forge.butterfly-effect.dev), but that proxy only
-// accepts requests from Manus-hosted IPs and returns 403 from any other host
-// (e.g. Railway), so it can never work for this self-hosted deployment.
-const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+export interface MapLatLng {
+  lat: number;
+  lng: number;
+}
 
-function loadMapScript() {
-  return new Promise((resolve, reject) => {
-    if (!API_KEY) {
-      console.error("VITE_GOOGLE_MAPS_API_KEY is not set; Google Maps cannot load.");
-      reject(new Error("Missing VITE_GOOGLE_MAPS_API_KEY"));
+const APP_KEY = import.meta.env.VITE_KAKAO_MAP_APP_KEY;
+
+let loadPromise: Promise<void> | null = null;
+
+function loadMapScript(): Promise<void> {
+  if (window.kakao?.maps) return Promise.resolve();
+  if (loadPromise) return loadPromise;
+
+  loadPromise = new Promise((resolve, reject) => {
+    if (!APP_KEY) {
+      console.error("VITE_KAKAO_MAP_APP_KEY is not set; Kakao Maps cannot load.");
+      loadPromise = null;
+      reject(new Error("Missing VITE_KAKAO_MAP_APP_KEY"));
       return;
     }
     const script = document.createElement("script");
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${API_KEY}&v=weekly&libraries=marker,places,geocoding,geometry`;
+    script.src = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${APP_KEY}&autoload=false&libraries=services`;
     script.async = true;
-    script.crossOrigin = "anonymous";
     script.onload = () => {
-      resolve(null);
-      script.remove(); // Clean up immediately
+      window.kakao.maps.load(() => resolve());
     };
     script.onerror = () => {
-      console.error("Failed to load Google Maps script");
-      reject(new Error("Failed to load Google Maps script"));
+      console.error("Failed to load Kakao Maps script");
+      loadPromise = null;
+      reject(new Error("Failed to load Kakao Maps script"));
     };
     document.head.appendChild(script);
   });
+
+  return loadPromise;
+}
+
+// Kakao's zoom "level" is the inverse of the Google-style zoom this app was
+// originally designed around (lower level = more zoomed in). Map the old
+// 10-19 zoom range onto Kakao's 1-14 level range so existing callers
+// (initialZoom={12}, etc.) don't all need to be rewritten.
+function zoomToLevel(zoom: number): number {
+  return Math.max(1, Math.min(14, 20 - zoom));
 }
 
 interface MapViewProps {
   className?: string;
-  initialCenter?: google.maps.LatLngLiteral;
+  initialCenter?: MapLatLng;
   initialZoom?: number;
-  onMapReady?: (map: google.maps.Map) => void;
+  onMapReady?: (map: any) => void;
 }
 
 export function MapView({
   className,
-  initialCenter = { lat: 37.7749, lng: -122.4194 },
+  initialCenter = { lat: 37.5665, lng: 126.978 }, // 서울시청
   initialZoom = 12,
   onMapReady,
 }: MapViewProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
-  const map = useRef<google.maps.Map | null>(null);
+  const map = useRef<any>(null);
 
   const init = usePersistFn(async () => {
     try {
@@ -141,15 +115,12 @@ export function MapView({
       console.error("Map container not found");
       return;
     }
-    map.current = new window.google.maps.Map(mapContainer.current, {
-      zoom: initialZoom,
-      center: initialCenter,
-      mapTypeControl: true,
-      fullscreenControl: true,
-      zoomControl: true,
-      streetViewControl: true,
-      mapId: "DEMO_MAP_ID",
+    const { kakao } = window;
+    map.current = new kakao.maps.Map(mapContainer.current, {
+      center: new kakao.maps.LatLng(initialCenter.lat, initialCenter.lng),
+      level: zoomToLevel(initialZoom),
     });
+    map.current.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
     if (onMapReady) {
       onMapReady(map.current);
     }
@@ -162,4 +133,47 @@ export function MapView({
   return (
     <div ref={mapContainer} className={cn("w-full h-[500px]", className)} />
   );
+}
+
+export interface KakaoPlaceResult {
+  id: string;
+  place_name: string;
+  address_name: string;
+  road_address_name?: string;
+  x: string; // longitude
+  y: string; // latitude
+}
+
+/** Keyword search across places/addresses, e.g. for a search-as-you-type dropdown. */
+export function searchKeyword(keyword: string): Promise<KakaoPlaceResult[]> {
+  return new Promise((resolve) => {
+    if (!window.kakao?.maps?.services || !keyword.trim()) {
+      resolve([]);
+      return;
+    }
+    const places = new window.kakao.maps.services.Places();
+    places.keywordSearch(keyword, (data: KakaoPlaceResult[], status: string) => {
+      resolve(status === window.kakao.maps.services.Status.OK ? data : []);
+    });
+  });
+}
+
+/** Marker with a custom-colored dot, for cluster/route visualization. */
+export function createDotMarker(map: any, position: MapLatLng, color: string, title?: string) {
+  const { kakao } = window;
+  const content = document.createElement("div");
+  content.style.width = "14px";
+  content.style.height = "14px";
+  content.style.borderRadius = "50%";
+  content.style.background = color;
+  content.style.border = "2px solid white";
+  content.style.boxShadow = "0 0 2px rgba(0,0,0,0.4)";
+  if (title) content.title = title;
+
+  return new kakao.maps.CustomOverlay({
+    map,
+    position: new kakao.maps.LatLng(position.lat, position.lng),
+    content,
+    yAnchor: 0.5,
+  });
 }
