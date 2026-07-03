@@ -14,6 +14,8 @@
 import "dotenv/config";
 import { drizzle } from "drizzle-orm/mysql2";
 import { eq } from "drizzle-orm";
+import { createPool } from "mysql2/promise";
+import { buildMysqlPoolConfig } from "../server/db";
 import {
   boardingPoints,
   events,
@@ -416,7 +418,10 @@ async function main() {
     console.error("[seed] DATABASE_URL 환경 변수가 설정되어 있지 않습니다.");
     process.exit(1);
   }
-  const db = drizzle(process.env.DATABASE_URL);
+  // Use the same pool-config parsing as server/db.ts (handles the `?ssl=true`
+  // query param TiDB requires — drizzle(url) alone passes ssl as a raw string,
+  // which mysql2 rejects with "SSL profile must be an object").
+  const db = drizzle(createPool(buildMysqlPoolConfig(process.env.DATABASE_URL)));
 
   let createdEvents = 0;
   let createdTrips = 0;
