@@ -30,6 +30,11 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 
 async function startServer() {
   const app = express();
+  // Railway terminates TLS at its edge and forwards over HTTP, setting
+  // X-Forwarded-Proto. Without trusting the proxy, req.protocol always
+  // reports "http", which breaks anything that builds an absolute URL from
+  // it (e.g. the Kakao OAuth redirect_uri, which must match https exactly).
+  app.set("trust proxy", 1);
   const server = createServer(app);
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
