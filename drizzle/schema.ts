@@ -38,7 +38,7 @@ export const events = mysqlTable("events", {
     "concert",
     "sports",
     "festival",
-    "awards",
+    "rally",
     "exhibition",
     "other",
   ])

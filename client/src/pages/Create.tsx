@@ -35,7 +35,7 @@ const STEPS = [
   { id: 4, label: "확인", icon: <CheckCircle2 className="h-4 w-4" /> },
 ];
 
-const CATEGORIES = ["concert", "sports", "festival", "awards", "exhibition", "other"] as const;
+const CATEGORIES = ["concert", "sports", "festival", "rally", "exhibition", "other"] as const;
 
 interface BoardingPointInput {
   name: string;

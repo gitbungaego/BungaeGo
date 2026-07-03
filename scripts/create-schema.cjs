@@ -30,7 +30,7 @@ const config = {
     `CREATE TABLE IF NOT EXISTS events (
       id INT AUTO_INCREMENT PRIMARY KEY,
       title VARCHAR(200) NOT NULL,
-      category ENUM('concert','sports','festival','awards','exhibition','other') NOT NULL DEFAULT 'other',
+      category ENUM('concert','sports','festival','rally','exhibition','other') NOT NULL DEFAULT 'other',
       eventDate TIMESTAMP NOT NULL,
       venue VARCHAR(200) NOT NULL,
       address VARCHAR(400),

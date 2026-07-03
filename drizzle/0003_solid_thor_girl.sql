@@ -1,0 +1,1 @@
+ALTER TABLE `events` MODIFY COLUMN `category` enum('concert','sports','festival','rally','exhibition','other') NOT NULL DEFAULT 'other';

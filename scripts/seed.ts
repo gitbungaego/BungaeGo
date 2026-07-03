@@ -49,7 +49,7 @@ interface SeedTrip {
 
 interface SeedEvent {
   title: string;
-  category: "concert" | "sports" | "festival" | "awards" | "exhibition" | "other";
+  category: "concert" | "sports" | "festival" | "rally" | "exhibition" | "other";
   eventDate: Date;
   venue: string;
   address?: string;

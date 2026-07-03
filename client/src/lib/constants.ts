@@ -2,7 +2,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   concert: "콘서트",
   sports: "스포츠",
   festival: "페스티벌",
-  awards: "시상식",
+  rally: "집회",
   exhibition: "전시·행사",
   other: "기타",
   all: "전체",
@@ -12,7 +12,7 @@ export const CATEGORY_COLORS: Record<string, string> = {
   concert: "bg-purple-100 text-purple-700 border-purple-200",
   sports: "bg-blue-100 text-blue-700 border-blue-200",
   festival: "bg-orange-100 text-orange-700 border-orange-200",
-  awards: "bg-yellow-100 text-yellow-700 border-yellow-200",
+  rally: "bg-red-100 text-red-700 border-red-200",
   exhibition: "bg-green-100 text-green-700 border-green-200",
   other: "bg-gray-100 text-gray-700 border-gray-200",
 };

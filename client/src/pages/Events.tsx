@@ -13,7 +13,7 @@ import {
 } from "@/lib/constants";
 import { Bus, MapPin, Search, Users } from "lucide-react";
 
-const CATEGORIES = ["all", "concert", "sports", "festival", "awards", "exhibition", "other"];
+const CATEGORIES = ["all", "concert", "sports", "festival", "rally", "exhibition", "other"];
 
 export default function EventsPage() {
   const [category, setCategory] = useState("all");
