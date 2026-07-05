@@ -61,11 +61,15 @@ import {
   updatePaymentStatus,
   updateRideRequestStatus,
   updateTripStatus,
+  updateUserStatus,
 } from "./db";
 import { buildFareItems, cancelReservationsForTrip } from "./payments";
+import { CONSENT_VERSIONS, recordConsent } from "./consents";
+import { isThemeAllowed } from "./featureFlags";
 import { getPolicy } from "./matching/confirmPolicy";
 import { notifyTrip } from "./notify/tripMessenger";
 import { runMatchingPipeline, type PipelineParams } from "./matching/pipeline";
+import { USER_STATUSES } from "../drizzle/schema";
 import type { Trip } from "../drizzle/schema";
 
 // ─── Admin guard ─────────────────────────────────────────────────────────────
@@ -133,6 +137,20 @@ export const appRouter = router({
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
       return { success: true } as const;
     }),
+  }),
+
+  // ─── Consents ──────────────────────────────────────────────────────────────
+  consents: router({
+    record: protectedProcedure
+      .input(z.object({ type: z.string().min(1).max(50) }))
+      .mutation(async ({ input, ctx }) => {
+        const version = CONSENT_VERSIONS[input.type];
+        if (!version) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: `알 수 없는 동의 유형입니다: ${input.type}` });
+        }
+        await recordConsent(ctx.user.id, input.type, version);
+        return { success: true } as const;
+      }),
   }),
 
   // ─── Events ────────────────────────────────────────────────────────────────
@@ -220,7 +238,8 @@ export const appRouter = router({
       .input(z.object({ eventId: z.number() }))
       .query(async ({ input }) => {
         const tripsForEvent = await getTripsByEventId(input.eventId);
-        return Promise.all(tripsForEvent.map(withAvailability));
+        const visible = tripsForEvent.filter((trip) => isThemeAllowed(trip.theme));
+        return Promise.all(visible.map(withAvailability));
       }),
 
     byId: publicProcedure
@@ -243,9 +262,14 @@ export const appRouter = router({
           returnAt: z.number().optional(),
           isRoundTrip: z.boolean().default(false),
           notes: z.string().optional(),
+          theme: z.string().max(20).default("standard"),
         })
       )
       .mutation(async ({ input, ctx }) => {
+        if (!isThemeAllowed(input.theme)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "테마 트립 기능이 아직 활성화되지 않았습니다." });
+        }
+
         const id = await createTrip({
           ...input,
           departureAt: new Date(input.departureAt),
@@ -280,7 +304,8 @@ export const appRouter = router({
 
     adminList: adminProcedure.query(async () => {
       const allTrips = await getAllTrips();
-      return Promise.all(allTrips.map(withAvailability));
+      const visible = allTrips.filter((trip) => isThemeAllowed(trip.theme));
+      return Promise.all(visible.map(withAvailability));
     }),
   }),
 
@@ -350,6 +375,13 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
+        if (ctx.user.status === "suspended") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "정지된 계정은 예약을 생성할 수 없습니다. 고객센터로 문의해주세요.",
+          });
+        }
+
         const trip = await getTripById(input.tripId);
         if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
 
@@ -621,6 +653,12 @@ export const appRouter = router({
   // ─── Admin ─────────────────────────────────────────────────────────────────
   admin: router({
     users: adminProcedure.query(() => getAllUsers()),
+    updateUserStatus: adminProcedure
+      .input(z.object({ userId: z.number(), status: z.enum(USER_STATUSES) }))
+      .mutation(async ({ input }) => {
+        await updateUserStatus(input.userId, input.status);
+        return { success: true } as const;
+      }),
     stats: adminProcedure.query(async () => {
       const [allEvents, allTrips, allReservations, allUsers, revenueByItemType] = await Promise.all([
         getAllEvents(),
