@@ -31,7 +31,7 @@ export default function Navbar() {
         <div className="flex h-16 items-center justify-between">
           {/* Logo */}
           <Link href="/" className="flex items-center gap-2 group">
-            <img src="/manus-storage/logo-beonggaego_ed3e311f.png" alt="번개GO" className="h-8 w-8 rounded-lg" />
+            <img src="/logo.png" alt="번개GO" className="h-9 w-auto" />
             <span className="font-bold text-lg tracking-tight text-foreground">
               <span className="text-primary">번개</span>GO
             </span>
