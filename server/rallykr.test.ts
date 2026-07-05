@@ -1,12 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { appRouter } from "./routers";
 import { buildFareItems, computeRefundableAmount } from "./payments";
 import { getPolicy, StandardPolicy } from "./matching/confirmPolicy";
 import { filterParticipants } from "./participants";
 import { buildTripMessage } from "./notify/tripMessenger";
+import { getSessionCookieOptions } from "./_core/cookies";
+import { hasConsent, isConsentCurrent } from "./consents";
+import { isEnabled, isThemeAllowed } from "./featureFlags";
 import type { ReservationWithPayment } from "./db";
 import type { PaymentItem, Trip } from "../drizzle/schema";
 import type { TrpcContext } from "./_core/context";
+import type { Request } from "express";
 
 function fakeReservation(overrides: Partial<ReservationWithPayment>): ReservationWithPayment {
   return {
@@ -56,6 +60,7 @@ function makeAdminCtx(): TrpcContext {
       email: "admin@bungae_go.com",
       loginMethod: "manus",
       role: "admin",
+      status: "active",
       createdAt: new Date(),
       updatedAt: new Date(),
       lastSignedIn: new Date(),
@@ -74,6 +79,7 @@ function makeUserCtx(): TrpcContext {
       email: "user@test.com",
       loginMethod: "manus",
       role: "user",
+      status: "active",
       createdAt: new Date(),
       updatedAt: new Date(),
       lastSignedIn: new Date(),
@@ -82,6 +88,36 @@ function makeUserCtx(): TrpcContext {
     },
   });
 }
+
+describe("getSessionCookieOptions", () => {
+  const originalCrossSiteCookies = process.env.CROSS_SITE_COOKIES;
+
+  afterEach(() => {
+    if (originalCrossSiteCookies === undefined) {
+      delete process.env.CROSS_SITE_COOKIES;
+    } else {
+      process.env.CROSS_SITE_COOKIES = originalCrossSiteCookies;
+    }
+  });
+
+  it("defaults to sameSite=lax over https", () => {
+    delete process.env.CROSS_SITE_COOKIES;
+    const req = { protocol: "https", headers: {} } as Request;
+    expect(getSessionCookieOptions(req)).toMatchObject({ sameSite: "lax", secure: true });
+  });
+
+  it("defaults to sameSite=lax, secure=false over http", () => {
+    delete process.env.CROSS_SITE_COOKIES;
+    const req = { protocol: "http", headers: {} } as Request;
+    expect(getSessionCookieOptions(req)).toMatchObject({ sameSite: "lax", secure: false });
+  });
+
+  it("switches to sameSite=none + secure when CROSS_SITE_COOKIES=true", () => {
+    process.env.CROSS_SITE_COOKIES = "true";
+    const req = { protocol: "http", headers: {} } as Request;
+    expect(getSessionCookieOptions(req)).toMatchObject({ sameSite: "none", secure: true });
+  });
+});
 
 describe("auth", () => {
   it("me returns null for unauthenticated user", async () => {
@@ -141,6 +177,37 @@ describe("trips", () => {
     const caller = appRouter.createCaller(makeCtx());
     await expect(caller.trips.byId({ id: 999999 })).rejects.toThrow();
   });
+
+  it("create rejects a non-standard theme when FEATURE_THEMES is off", async () => {
+    delete process.env.FEATURE_THEMES;
+    const caller = appRouter.createCaller(makeUserCtx());
+    await expect(
+      caller.trips.create({
+        eventId: 1,
+        minCount: 10,
+        maxCount: 40,
+        price: 10000,
+        departureAt: Date.now(),
+        theme: "festival",
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("create does not block a non-standard theme when FEATURE_THEMES is on", async () => {
+    process.env.FEATURE_THEMES = "true";
+    const caller = appRouter.createCaller(makeUserCtx());
+    await expect(
+      caller.trips.create({
+        eventId: 1,
+        minCount: 10,
+        maxCount: 40,
+        price: 10000,
+        departureAt: Date.now(),
+        theme: "festival",
+      })
+    ).rejects.not.toMatchObject({ code: "FORBIDDEN" });
+    delete process.env.FEATURE_THEMES;
+  });
 });
 
 describe("boardingPoints", () => {
@@ -163,6 +230,20 @@ describe("reservations", () => {
     const caller = appRouter.createCaller(makeUserCtx());
     const result = await caller.reservations.myList();
     expect(Array.isArray(result)).toBe(true);
+  });
+
+  it("create rejects suspended users", async () => {
+    const ctx = makeUserCtx();
+    ctx.user = { ...ctx.user!, status: "suspended" };
+    const caller = appRouter.createCaller(ctx);
+    await expect(
+      caller.reservations.create({
+        tripId: 1,
+        seats: 1,
+        passengerName: "정지테스터",
+        passengerPhone: "010-0000-0000",
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });
 
@@ -328,6 +409,62 @@ describe("tripMessenger", () => {
     const withoutStop = buildTripMessage("departureReminder", { departureAt: new Date() });
     expect(withStop.body).toContain("강남역");
     expect(withoutStop.body).not.toContain("강남역");
+  });
+});
+
+describe("consents", () => {
+  it("isConsentCurrent is false when no consent exists yet", () => {
+    expect(isConsentCurrent(undefined, "2026-01-01")).toBe(false);
+  });
+
+  it("isConsentCurrent is false when the latest consent is an older version", () => {
+    const outdated = { id: 1, userId: 1, type: "tos", version: "2025-01-01", agreedAt: new Date() };
+    expect(isConsentCurrent(outdated, "2026-01-01")).toBe(false);
+  });
+
+  it("isConsentCurrent is true when the latest consent matches the current version", () => {
+    const current = { id: 1, userId: 1, type: "tos", version: "2026-01-01", agreedAt: new Date() };
+    expect(isConsentCurrent(current, "2026-01-01")).toBe(true);
+  });
+
+  it("hasConsent rejects an unregistered consent type", async () => {
+    await expect(hasConsent(1, "not-a-real-type")).rejects.toThrow();
+  });
+});
+
+describe("featureFlags", () => {
+  const originalFeatureThemes = process.env.FEATURE_THEMES;
+
+  afterEach(() => {
+    if (originalFeatureThemes === undefined) {
+      delete process.env.FEATURE_THEMES;
+    } else {
+      process.env.FEATURE_THEMES = originalFeatureThemes;
+    }
+  });
+
+  it("isEnabled is off by default", () => {
+    delete process.env.FEATURE_THEMES;
+    expect(isEnabled("themes")).toBe(false);
+  });
+
+  it("isEnabled turns on only for the literal string 'true'", () => {
+    process.env.FEATURE_THEMES = "true";
+    expect(isEnabled("themes")).toBe(true);
+    process.env.FEATURE_THEMES = "1";
+    expect(isEnabled("themes")).toBe(false);
+  });
+
+  it("isThemeAllowed always allows the standard theme", () => {
+    delete process.env.FEATURE_THEMES;
+    expect(isThemeAllowed("standard")).toBe(true);
+  });
+
+  it("isThemeAllowed gates non-standard themes behind FEATURE_THEMES", () => {
+    delete process.env.FEATURE_THEMES;
+    expect(isThemeAllowed("festival")).toBe(false);
+    process.env.FEATURE_THEMES = "true";
+    expect(isThemeAllowed("festival")).toBe(true);
   });
 });
 
