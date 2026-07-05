@@ -39,13 +39,25 @@ export function getSessionCookieOptions(
   //       ? hostname
   //       : undefined;
   
- const secure = isSecureRequest(req);
+  const secure = isSecureRequest(req);
+
+  // Cross-origin clients (e.g. a future Capacitor app) need SameSite=None to
+  // send the cookie at all; same-site prod (front + API both on bungaego.com)
+  // should stay Lax so third-party-cookie-blocking browsers (Incognito, iOS ITP)
+  // don't drop the session.
+  if (process.env.CROSS_SITE_COOKIES === "true") {
+    return {
+      httpOnly: true,
+      path: "/",
+      sameSite: "none",
+      secure: true,
+    };
+  }
 
   return {
-  httpOnly: true,
-  path: "/",
-  sameSite: secure ? "none" : "lax",
-  secure,
+    httpOnly: true,
+    path: "/",
+    sameSite: "lax",
+    secure,
   };
-
 }

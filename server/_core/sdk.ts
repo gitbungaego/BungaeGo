@@ -321,6 +321,7 @@ class SDKServer {
           email: null,
           loginMethod: null,
           role: "user",
+          status: "active",
           phone: null,
           referralCode: null,
           pointsBalance: 0,

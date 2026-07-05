@@ -1,9 +1,27 @@
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import type { Express, Request, Response } from "express";
+import type { User } from "../../drizzle/schema";
 import * as db from "../db";
+import { CONSENT_VERSIONS, hasConsent, recordConsent } from "../consents";
 import { ENV } from "./env";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
+
+const SUSPENDED_LOGIN_MESSAGE = "정지된 계정입니다. 고객센터에 문의해주세요.";
+
+function isSuspended(user: User | undefined): boolean {
+  return user?.status === "suspended";
+}
+
+async function recordTosConsentIfMissing(userId: number): Promise<void> {
+  try {
+    if (!(await hasConsent(userId, "tos"))) {
+      await recordConsent(userId, "tos", CONSENT_VERSIONS.tos);
+    }
+  } catch (error) {
+    console.warn("[OAuth] Failed to record ToS consent:", error);
+  }
+}
 
 function getQueryParam(req: Request, key: string): string | undefined {
   const value = req.query[key];
@@ -54,8 +72,9 @@ export function registerOAuthRoutes(app: Express) {
     const name = process.env.OWNER_NAME || "관리자";
 
     try {
+      let user: User | undefined;
       try {
-        await db.upsertUser({
+        user = await db.upsertUser({
           openId,
           name,
           email: `${openId}@local.dev`,
@@ -68,6 +87,12 @@ export function registerOAuthRoutes(app: Express) {
         }
         console.warn("[OAuth] DB unavailable during fallback login, continuing with session", error);
       }
+
+      if (isSuspended(user)) {
+        res.status(403).json({ error: SUSPENDED_LOGIN_MESSAGE });
+        return;
+      }
+      if (user) await recordTosConsentIfMissing(user.id);
 
       const sessionToken = await sdk.createSessionToken(openId, {
         name,
@@ -97,26 +122,37 @@ export function registerOAuthRoutes(app: Express) {
         "local-admin-openid";
       const name = (req.query.name as string) || "로컬테스터";
 
-      // DB에 사용자 생성/갱신 (OWNER_OPEN_ID면 자동으로 admin 권한)
-      await db.upsertUser({
-        openId,
-        name,
-        email: `${openId}@local.dev`,
-        loginMethod: "local-dev",
-        lastSignedIn: new Date(),
-      });
+      try {
+        // DB에 사용자 생성/갱신 (OWNER_OPEN_ID면 자동으로 admin 권한)
+        const user = await db.upsertUser({
+          openId,
+          name,
+          email: `${openId}@local.dev`,
+          loginMethod: "local-dev",
+          lastSignedIn: new Date(),
+        });
 
-      const sessionToken = await sdk.createSessionToken(openId, {
-        name,
-        expiresInMs: ONE_YEAR_MS,
-      });
+        if (isSuspended(user)) {
+          res.status(403).json({ error: SUSPENDED_LOGIN_MESSAGE });
+          return;
+        }
+        if (user) await recordTosConsentIfMissing(user.id);
 
-      const cookieOptions = getSessionCookieOptions(req);
-      res.cookie(COOKIE_NAME, sessionToken, {
-        ...cookieOptions,
-        maxAge: ONE_YEAR_MS,
-      });
-      res.redirect(302, "/");
+        const sessionToken = await sdk.createSessionToken(openId, {
+          name,
+          expiresInMs: ONE_YEAR_MS,
+        });
+
+        const cookieOptions = getSessionCookieOptions(req);
+        res.cookie(COOKIE_NAME, sessionToken, {
+          ...cookieOptions,
+          maxAge: ONE_YEAR_MS,
+        });
+        res.redirect(302, "/");
+      } catch (error) {
+        console.error("[OAuth] Dev login failed", error);
+        res.status(500).json({ error: "dev login failed", detail: String(error) });
+      }
     });
   }
   // ── 카카오 로그인 ──────────────────────────────────────────────────────────
@@ -195,8 +231,9 @@ export function registerOAuthRoutes(app: Express) {
       const name = kakaoUser.kakao_account?.profile?.nickname || "카카오사용자";
       const email = kakaoUser.kakao_account?.email ?? null;
 
+      let user: User | undefined;
       try {
-        await db.upsertUser({
+        user = await db.upsertUser({
           openId,
           name,
           email,
@@ -207,6 +244,12 @@ export function registerOAuthRoutes(app: Express) {
         if (!db.isRecoverableDatabaseError(error)) throw error;
         console.warn("[OAuth] DB unavailable during Kakao login, continuing with session", error);
       }
+
+      if (isSuspended(user)) {
+        res.status(403).json({ error: SUSPENDED_LOGIN_MESSAGE });
+        return;
+      }
+      if (user) await recordTosConsentIfMissing(user.id);
 
       const sessionToken = await sdk.createSessionToken(openId, {
         name,
@@ -241,13 +284,19 @@ export function registerOAuthRoutes(app: Express) {
         return;
       }
 
-      await db.upsertUser({
+      const user = await db.upsertUser({
         openId: userInfo.openId,
         name: userInfo.name || null,
         email: userInfo.email ?? null,
         loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
         lastSignedIn: new Date(),
       });
+
+      if (isSuspended(user)) {
+        res.status(403).json({ error: SUSPENDED_LOGIN_MESSAGE });
+        return;
+      }
+      if (user) await recordTosConsentIfMissing(user.id);
 
       const sessionToken = await sdk.createSessionToken(userInfo.openId, {
         name: userInfo.name || "",
