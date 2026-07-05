@@ -5,9 +5,11 @@ import {
   BoardingPoint,
   ChargeType,
   Cluster,
+  Consent,
   Event,
   InsertBoardingPoint,
   InsertCluster,
+  InsertConsent,
   InsertEvent,
   InsertPoint,
   InsertReferral,
@@ -28,8 +30,10 @@ import {
   StopCandidate,
   Trip,
   User,
+  UserStatus,
   boardingPoints,
   clusters,
+  consents,
   events,
   paymentItems,
   payments,
@@ -46,24 +50,53 @@ import { nanoid } from "nanoid";
 
 let _db: ReturnType<typeof createMysqlDb> | null = null;
 
+const RECOVERABLE_MYSQL_ERROR_CODES = new Set([
+  "ER_NO_SUCH_TABLE",
+  "ER_BAD_TABLE_ERROR",
+  "ER_BAD_FIELD_ERROR",
+  "ER_BAD_DB_ERROR",
+  "ER_ACCESS_DENIED_ERROR",
+  "ER_DBACCESS_DENIED_ERROR",
+  "ER_TABLEACCESS_DENIED_ERROR",
+  "ER_SPECIFIC_ACCESS_DENIED_ERROR",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "PROTOCOL_CONNECTION_LOST",
+]);
+
+// Drizzle wraps the real driver error as `DrizzleQueryError(message, params, cause)`,
+// so the recoverable MySQL error code/message lives in `.cause`, not on the
+// outer error itself. Walk the chain so wrapped errors are classified correctly.
+function getErrorChain(error: unknown, depth = 0): unknown[] {
+  if (!error || depth > 5) return [];
+  const cause = error instanceof Error ? (error as Error & { cause?: unknown }).cause : undefined;
+  return [error, ...getErrorChain(cause, depth + 1)];
+}
+
 export function isRecoverableDatabaseError(error: unknown): boolean {
-  if (!error) return false;
-  const message = error instanceof Error ? error.message : String(error);
-  const text = message.toLowerCase();
+  return getErrorChain(error).some((err) => {
+    const code = (err as { code?: unknown } | undefined)?.code;
+    if (typeof code === "string" && RECOVERABLE_MYSQL_ERROR_CODES.has(code)) return true;
 
-  const isMissingTable =
-    (text.includes("table") && text.includes("doesn't exist")) ||
-    text.includes("does not exist");
-  const isPermissionIssue =
-    text.includes("command denied") ||
-    text.includes("access denied");
-  const isConnectionIssue =
-    text.includes("econnreset") ||
-    text.includes("econnrefused") ||
-    text.includes("enotfound") ||
-    text.includes("getaddrinfo");
+    const message = err instanceof Error ? err.message : String(err);
+    const text = message.toLowerCase();
 
-  return isMissingTable || isPermissionIssue || isConnectionIssue || text.includes("ssl profile");
+    const isMissingTable =
+      (text.includes("table") && text.includes("doesn't exist")) ||
+      text.includes("does not exist");
+    const isPermissionIssue =
+      text.includes("command denied") ||
+      text.includes("access denied");
+    const isConnectionIssue =
+      text.includes("econnreset") ||
+      text.includes("econnrefused") ||
+      text.includes("enotfound") ||
+      text.includes("getaddrinfo");
+
+    return isMissingTable || isPermissionIssue || isConnectionIssue || text.includes("ssl profile");
+  });
 }
 
 export function buildMysqlPoolConfig(databaseUrl: string): PoolOptions {
@@ -111,10 +144,10 @@ export async function getDb() {
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
-export async function upsertUser(user: InsertUser): Promise<void> {
+export async function upsertUser(user: InsertUser): Promise<User | undefined> {
   if (!user.openId) throw new Error("User openId is required for upsert");
   const db = await getDb();
-  if (!db) return;
+  if (!db) return undefined;
 
   const values: InsertUser = { openId: user.openId };
   const updateSet: Record<string, unknown> = {};
@@ -150,7 +183,16 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       throw error;
     }
     console.warn("[Database] Upsert skipped due to recoverable DB issue", error);
+    return undefined;
   }
+
+  return getUserByOpenId(user.openId);
+}
+
+export async function updateUserStatus(userId: number, status: UserStatus): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(users).set({ status }).where(eq(users.id, userId));
 }
 
 export async function getUserByOpenId(openId: string): Promise<User | undefined> {
@@ -856,4 +898,26 @@ export async function finalizeRideRequestRoute(
     .update(rideRequests)
     .set({ status: "route_confirmed", ...data })
     .where(eq(rideRequests.id, id));
+}
+
+// ─── Consents ─────────────────────────────────────────────────────────────────
+export async function insertConsent(data: InsertConsent): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(consents).values(data);
+}
+
+export async function getLatestConsentByUserAndType(
+  userId: number,
+  type: string
+): Promise<Consent | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(consents)
+    .where(and(eq(consents.userId, userId), eq(consents.type, type)))
+    .orderBy(desc(consents.id))
+    .limit(1);
+  return rows[0];
 }
