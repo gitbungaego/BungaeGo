@@ -234,7 +234,7 @@ export default function BookingPage({ tripId }: Props) {
                 <button
                   onClick={() => setSeats(Math.min(8, seats + 1))}
                   className="h-10 w-10 rounded-full border border-border flex items-center justify-center hover:bg-muted transition-colors disabled:opacity-40"
-                  disabled={seats >= Math.min(8, trip.maxCount - trip.currentCount)}
+                  disabled={seats >= Math.min(8, trip.availability.remaining)}
                 >
                   <Plus className="h-4 w-4" />
                 </button>

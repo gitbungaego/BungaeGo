@@ -170,7 +170,7 @@ export default function EventDetailPage({ id }: Props) {
                 {trips.map((trip) => {
                   const pct = Math.min(100, Math.round((trip.currentCount / trip.maxCount) * 100));
                   const isConfirmed = trip.status === "confirmed";
-                  const isFull = trip.currentCount >= trip.maxCount;
+                  const isFull = trip.availability.remaining <= 0;
                   const isSelected = selectedTrip?.id === trip.id;
 
                   return (

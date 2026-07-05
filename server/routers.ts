@@ -10,9 +10,11 @@ import {
   assignRideRequestsToCluster,
   clearRideRequestClusterAssignments,
   clearRideRequestsByTripId,
+  confirmTripIfCollecting,
   createBoardingPoint,
   createCluster,
   createEvent,
+  createPaymentWithItems,
   createReferral,
   createReservation,
   createRideRequest,
@@ -35,11 +37,14 @@ import {
   getBoardingPointsByTripId,
   getEventById,
   getEvents,
+  getLatestPaymentByReservationId,
+  getPaidPaymentItemTotalsByType,
   getPendingRideRequestsByEventId,
   getPointsByUserId,
   getReferralsByUserId,
   getReservationById,
   getReservationsByUserId,
+  getReservationsWithPaymentsByTripId,
   getRideRequestById,
   getRideRequestsByEventId,
   getRideRequestsByUserId,
@@ -48,15 +53,20 @@ import {
   getUserByOpenId,
   getUserByReferralCode,
   incrementTripCount,
+  reserveSeatsWithLock,
   setStopCandidateActive,
   updateCluster,
   updateEvent,
   updateEventStatus,
-  updateReservationStatus,
+  updatePaymentStatus,
   updateRideRequestStatus,
   updateTripStatus,
 } from "./db";
+import { buildFareItems, cancelReservationsForTrip } from "./payments";
+import { getPolicy } from "./matching/confirmPolicy";
+import { notifyTrip } from "./notify/tripMessenger";
 import { runMatchingPipeline, type PipelineParams } from "./matching/pipeline";
+import type { Trip } from "../drizzle/schema";
 
 // ─── Admin guard ─────────────────────────────────────────────────────────────
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -81,6 +91,35 @@ const pipelineParamsInput = pipelineParamsSchema.partial().optional();
 
 function resolvePipelineParams(input?: z.infer<typeof pipelineParamsInput>): PipelineParams {
   return pipelineParamsSchema.parse(input ?? {});
+}
+
+// ─── Trip confirm policy helpers ──────────────────────────────────────────────
+async function maybeConfirmTrip(tripId: number): Promise<void> {
+  const trip = await getTripById(tripId);
+  if (!trip) return;
+  const policy = getPolicy(trip.theme);
+  const tripReservations = await getReservationsWithPaymentsByTripId(tripId);
+  if (!policy.canConfirm(trip, tripReservations)) return;
+
+  // Idempotent: only the caller that actually flips collecting -> confirmed
+  // gets true back, so confirm-only follow-up never double-fires when two
+  // reservations for the same trip cross minCount around the same time.
+  const didConfirm = await confirmTripIfCollecting(tripId);
+  if (!didConfirm) return;
+
+  const event = await getEventById(trip.eventId);
+  await notifyTrip(
+    tripId,
+    "tripConfirmed",
+    { eventTitle: event?.title ?? "셔틀", departureAt: trip.departureAt },
+    "all"
+  ).catch((error) => console.warn("[maybeConfirmTrip] notifyTrip failed:", error));
+}
+
+async function withAvailability(trip: Trip) {
+  const policy = getPolicy(trip.theme);
+  const tripReservations = await getReservationsWithPaymentsByTripId(trip.id);
+  return { ...trip, availability: policy.availability(trip, tripReservations) };
 }
 
 export const appRouter = router({
@@ -179,14 +218,17 @@ export const appRouter = router({
   trips: router({
     byEventId: publicProcedure
       .input(z.object({ eventId: z.number() }))
-      .query(({ input }) => getTripsByEventId(input.eventId)),
+      .query(async ({ input }) => {
+        const tripsForEvent = await getTripsByEventId(input.eventId);
+        return Promise.all(tripsForEvent.map(withAvailability));
+      }),
 
     byId: publicProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ input }) => {
         const trip = await getTripById(input.id);
         if (!trip) throw new TRPCError({ code: "NOT_FOUND" });
-        return trip;
+        return withAvailability(trip);
       }),
 
     create: protectedProcedure
@@ -221,11 +263,25 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input }) => {
+        const trip = await getTripById(input.id);
+        if (!trip) throw new TRPCError({ code: "NOT_FOUND" });
+
+        const shouldCascadeRefund =
+          input.status === "cancelled" && (trip.status === "collecting" || trip.status === "confirmed");
+
         await updateTripStatus(input.id, input.status);
+
+        if (shouldCascadeRefund) {
+          await cancelReservationsForTrip(trip);
+        }
+
         return { success: true };
       }),
 
-    adminList: adminProcedure.query(() => getAllTrips()),
+    adminList: adminProcedure.query(async () => {
+      const allTrips = await getAllTrips();
+      return Promise.all(allTrips.map(withAvailability));
+    }),
   }),
 
   // ─── Boarding Points ───────────────────────────────────────────────────────
@@ -296,14 +352,8 @@ export const appRouter = router({
       .mutation(async ({ input, ctx }) => {
         const trip = await getTripById(input.tripId);
         if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
-        if (trip.status === "cancelled") throw new TRPCError({ code: "BAD_REQUEST", message: "취소된 셔틀입니다." });
-        if (trip.currentCount + input.seats > trip.maxCount) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "좌석이 부족합니다." });
-        }
 
-        const totalAmount = trip.price * input.seats - input.pointsUsed;
-
-        // Handle referral
+        // Handle referral (doesn't touch seat capacity, safe outside the lock)
         let referrerId: number | undefined;
         if (input.referralCode) {
           const referrer = await getUserByReferralCode(input.referralCode);
@@ -312,23 +362,48 @@ export const appRouter = router({
           }
         }
 
-        const reservationId = await createReservation({
-          userId: ctx.user.id,
-          tripId: input.tripId,
-          boardingPointId: input.boardingPointId,
-          seats: input.seats,
-          totalAmount,
-          pointsUsed: input.pointsUsed,
-          passengerName: input.passengerName,
-          passengerPhone: input.passengerPhone,
-          passengerEmail: input.passengerEmail,
-          referralCode: input.referralCode,
-          paymentMethod: input.paymentMethod ?? "mock",
-          status: "paid",
+        // Seat validation + reservation insert run inside a single transaction
+        // with the trip row locked (SELECT ... FOR UPDATE), so two concurrent
+        // requests for the last seat can't both read "1 remaining" and both
+        // succeed — the second waits for the lock and re-validates against
+        // the first's already-committed seat count.
+        const reservationId = await reserveSeatsWithLock(input.tripId, async ({ trip: lockedTrip, reservations: tripReservations, insertReservation, incrementCount }) => {
+          const policy = getPolicy(lockedTrip.theme);
+
+          const reserveCheck = policy.canReserve(lockedTrip, tripReservations, ctx.user);
+          if (!reserveCheck.ok) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: reserveCheck.reason });
+          }
+          if (input.seats > policy.availability(lockedTrip, tripReservations).remaining) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "좌석이 부족합니다." });
+          }
+
+          const id = await insertReservation({
+            userId: ctx.user.id,
+            boardingPointId: input.boardingPointId,
+            seats: input.seats,
+            pointsUsed: input.pointsUsed,
+            passengerName: input.passengerName,
+            passengerPhone: input.passengerPhone,
+            passengerEmail: input.passengerEmail,
+            referralCode: input.referralCode,
+          });
+          await incrementCount(input.seats);
+          return id;
         });
 
-        // Increment trip count & auto-confirm
-        await incrementTripCount(input.tripId, input.seats);
+        const items = buildFareItems({ fareAmount: trip.price * input.seats, pointsUsed: input.pointsUsed });
+        await createPaymentWithItems({ reservationId, method: "mock", chargeType: "prepaid", items });
+
+        await notifyTrip(
+          input.tripId,
+          "reservationConfirmed",
+          { passengerName: input.passengerName, seats: input.seats, departureAt: trip.departureAt },
+          [ctx.user.id]
+        ).catch((error) => console.warn("[reservations.create] notifyTrip failed:", error));
+
+        // Auto-confirm if this reservation reached minCount
+        await maybeConfirmTrip(input.tripId);
 
         // Deduct points used
         if (input.pointsUsed > 0) {
@@ -360,10 +435,14 @@ export const appRouter = router({
         }
         if (res.status === "cancelled") throw new TRPCError({ code: "BAD_REQUEST", message: "이미 취소된 예약입니다." });
 
-        await updateReservationStatus(res.id, "cancelled", {
-          cancelledAt: new Date(),
-          cancelReason: input.reason,
-        });
+        const payment = await getLatestPaymentByReservationId(res.id);
+        if (payment) {
+          await updatePaymentStatus(payment.id, "cancelled", {
+            cancelledAt: new Date(),
+            cancelReason: "user_request",
+            cancelNote: input.reason,
+          });
+        }
         await decrementTripCount(res.tripId, res.seats);
 
         // Refund points used
@@ -543,11 +622,12 @@ export const appRouter = router({
   admin: router({
     users: adminProcedure.query(() => getAllUsers()),
     stats: adminProcedure.query(async () => {
-      const [allEvents, allTrips, allReservations, allUsers] = await Promise.all([
+      const [allEvents, allTrips, allReservations, allUsers, revenueByItemType] = await Promise.all([
         getAllEvents(),
         getAllTrips(),
         getAllReservations(),
         getAllUsers(),
+        getPaidPaymentItemTotalsByType(),
       ]);
       return {
         totalEvents: allEvents.length,
@@ -560,6 +640,7 @@ export const appRouter = router({
         totalRevenue: allReservations
           .filter((r) => r.status === "paid")
           .reduce((sum, r) => sum + r.totalAmount, 0),
+        revenueByItemType,
       };
     }),
 
@@ -743,17 +824,29 @@ export const appRouter = router({
                   tripId,
                   boardingPointId,
                   seats: request.seats,
-                  totalAmount: request.totalAmount,
                   pointsUsed: 0,
                   passengerName: request.passengerName ?? undefined,
                   passengerPhone: request.passengerPhone ?? undefined,
                   passengerEmail: request.passengerEmail ?? undefined,
                   referralCode: request.referralCodeUsed ?? undefined,
-                  paymentMethod: request.paymentMethod ?? "mock",
-                  status: "paid",
                 });
 
+                await createPaymentWithItems({
+                  reservationId,
+                  method: "mock",
+                  chargeType: "prepaid",
+                  items: [{ type: "fare", amount: request.totalAmount, label: "셔틀 요금" }],
+                });
+
+                await notifyTrip(
+                  tripId,
+                  "reservationConfirmed",
+                  { passengerName: request.passengerName ?? "고객", seats: request.seats, departureAt: route.departureAt },
+                  [request.userId]
+                ).catch((error) => console.warn("[admin.matching.commit] notifyTrip failed:", error));
+
                 await incrementTripCount(tripId, request.seats);
+                await maybeConfirmTrip(tripId);
                 await finalizeRideRequestRoute(requestId, { tripId, boardingPointId, reservationId });
                 matchedRequestCount++;
               }

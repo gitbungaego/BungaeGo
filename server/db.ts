@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/mysql2";
 import { createPool, type PoolOptions } from "mysql2/promise";
 import {
   BoardingPoint,
+  ChargeType,
   Cluster,
   Event,
   InsertBoardingPoint,
@@ -15,6 +16,11 @@ import {
   InsertStopCandidate,
   InsertTrip,
   InsertUser,
+  Payment,
+  PaymentCancelReason,
+  PaymentItem,
+  PaymentItemType,
+  PaymentMethod,
   Point,
   Referral,
   Reservation,
@@ -25,6 +31,8 @@ import {
   boardingPoints,
   clusters,
   events,
+  paymentItems,
+  payments,
   points,
   referrals,
   reservations,
@@ -36,7 +44,7 @@ import {
 import { ENV } from "./_core/env";
 import { nanoid } from "nanoid";
 
-let _db: ReturnType<typeof drizzle> | null = null;
+let _db: ReturnType<typeof createMysqlDb> | null = null;
 
 export function isRecoverableDatabaseError(error: unknown): boolean {
   if (!error) return false;
@@ -290,6 +298,20 @@ export async function updateTripStatus(
   await db.update(trips).set({ status }).where(eq(trips.id, id));
 }
 
+// Conditional UPDATE guarded by the current status: only the caller whose
+// UPDATE actually flips collecting -> confirmed gets affectedRows > 0, so
+// concurrent callers can safely treat this as "did I just confirm it?" and
+// skip confirm-only follow-up (e.g. a future bulk-billing hook) otherwise.
+export async function confirmTripIfCollecting(tripId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const result = await db
+    .update(trips)
+    .set({ status: "confirmed" })
+    .where(and(eq(trips.id, tripId), eq(trips.status, "collecting")));
+  return (result[0] as any).affectedRows > 0;
+}
+
 export async function incrementTripCount(tripId: number, seats: number): Promise<Trip | undefined> {
   const db = await getDb();
   if (!db) return undefined;
@@ -297,13 +319,7 @@ export async function incrementTripCount(tripId: number, seats: number): Promise
     .update(trips)
     .set({ currentCount: sql`${trips.currentCount} + ${seats}` })
     .where(eq(trips.id, tripId));
-  // Auto-confirm if min reached
-  const trip = await getTripById(tripId);
-  if (trip && trip.currentCount >= trip.minCount && trip.status === "collecting") {
-    await updateTripStatus(tripId, "confirmed");
-    return { ...trip, status: "confirmed" };
-  }
-  return trip;
+  return getTripById(tripId);
 }
 
 export async function decrementTripCount(tripId: number, seats: number): Promise<void> {
@@ -313,6 +329,63 @@ export async function decrementTripCount(tripId: number, seats: number): Promise
     .update(trips)
     .set({ currentCount: sql`GREATEST(0, ${trips.currentCount} - ${seats})` })
     .where(eq(trips.id, tripId));
+}
+
+// Serializes reservation creation per trip: locks the trip row with
+// SELECT ... FOR UPDATE inside a transaction, reads a consistent snapshot of
+// its reservations, then lets the caller validate (via ConfirmPolicy) and
+// insert within the same transaction. Any concurrent call for the same trip
+// blocks on the row lock until this one commits, which rules out two
+// requests both reading "1 seat left" and both succeeding.
+export async function reserveSeatsWithLock<T>(
+  tripId: number,
+  fn: (ctx: {
+    trip: Trip;
+    reservations: ReservationWithPayment[];
+    insertReservation: (data: Omit<InsertReservation, "id" | "tripId">) => Promise<number>;
+    incrementCount: (seats: number) => Promise<void>;
+  }) => Promise<T>
+): Promise<T> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+
+  return db.transaction(async (tx) => {
+    const [trip] = await tx.select().from(trips).where(eq(trips.id, tripId)).for("update");
+    if (!trip) {
+      throw new Error(`Trip ${tripId} not found`);
+    }
+
+    const reservationRows = await tx.select().from(reservations).where(eq(reservations.tripId, tripId));
+    const reservationIds = reservationRows.map((r) => r.id);
+    const paymentRows = reservationIds.length
+      ? await tx.select().from(payments).where(inArray(payments.reservationId, reservationIds))
+      : [];
+    const latestPaymentByReservationId = new Map<number, Payment>();
+    for (const payment of paymentRows) {
+      const existing = latestPaymentByReservationId.get(payment.reservationId);
+      if (!existing || payment.id > existing.id) {
+        latestPaymentByReservationId.set(payment.reservationId, payment);
+      }
+    }
+    const reservationsWithPayments = reservationRows.map((r) =>
+      flattenReservation(r, latestPaymentByReservationId.get(r.id))
+    );
+
+    const insertReservation = async (data: Omit<InsertReservation, "id" | "tripId">): Promise<number> => {
+      const qrToken = nanoid(32);
+      const result = await tx.insert(reservations).values({ ...data, tripId, qrToken });
+      return (result[0] as any).insertId;
+    };
+
+    const incrementCount = async (seats: number): Promise<void> => {
+      await tx
+        .update(trips)
+        .set({ currentCount: sql`${trips.currentCount} + ${seats}` })
+        .where(eq(trips.id, tripId));
+    };
+
+    return fn({ trip, reservations: reservationsWithPayments, insertReservation, incrementCount });
+  });
 }
 
 export async function getAllTrips(): Promise<Trip[]> {
@@ -358,21 +431,54 @@ export async function deleteBoardingPointsByTripId(tripId: number): Promise<void
 }
 
 // ─── Reservations ─────────────────────────────────────────────────────────────
-export async function getReservationsByUserId(userId: number): Promise<Reservation[]> {
+// `status`/`totalAmount`/`paymentMethod`/`cancelledAt`/`cancelReason` live on
+// `payments` now; these accessors flatten the reservation's latest payment
+// back onto the same field names so callers (routers.ts, client) are unaffected.
+export type ReservationWithPayment = Reservation & {
+  status: Payment["status"];
+  totalAmount: number;
+  paymentMethod: PaymentMethod | null;
+  chargeType: ChargeType | null;
+  paidAt: Date | null;
+  cancelledAt: Date | null;
+  cancelReason: PaymentCancelReason | null;
+  cancelNote: string | null;
+};
+
+function flattenReservation(reservation: Reservation, payment: Payment | undefined): ReservationWithPayment {
+  return {
+    ...reservation,
+    status: payment?.status ?? "pending",
+    totalAmount: payment?.totalAmount ?? 0,
+    paymentMethod: payment?.method ?? null,
+    chargeType: payment?.chargeType ?? null,
+    paidAt: payment?.paidAt ?? null,
+    cancelledAt: payment?.cancelledAt ?? null,
+    cancelReason: payment?.cancelReason ?? null,
+    cancelNote: payment?.cancelNote ?? null,
+  };
+}
+
+export async function getReservationsByUserId(userId: number): Promise<ReservationWithPayment[]> {
   const db = await getDb();
   if (!db) return [];
-  return db
+  const rows = await db
     .select()
     .from(reservations)
     .where(eq(reservations.userId, userId))
     .orderBy(desc(reservations.createdAt));
+  const paymentsByReservation = await getLatestPaymentsByReservationIds(rows.map((r) => r.id));
+  return rows.map((r) => flattenReservation(r, paymentsByReservation.get(r.id)));
 }
 
-export async function getReservationById(id: number): Promise<Reservation | undefined> {
+export async function getReservationById(id: number): Promise<ReservationWithPayment | undefined> {
   const db = await getDb();
   if (!db) return undefined;
   const result = await db.select().from(reservations).where(eq(reservations.id, id)).limit(1);
-  return result[0];
+  const reservation = result[0];
+  if (!reservation) return undefined;
+  const payment = await getLatestPaymentByReservationId(reservation.id);
+  return flattenReservation(reservation, payment);
 }
 
 export async function createReservation(data: InsertReservation): Promise<number> {
@@ -383,26 +489,151 @@ export async function createReservation(data: InsertReservation): Promise<number
   return (result[0] as any).insertId;
 }
 
-export async function updateReservationStatus(
-  id: number,
-  status: Reservation["status"],
-  extra?: Partial<Reservation>
-): Promise<void> {
-  const db = await getDb();
-  if (!db) return;
-  await db.update(reservations).set({ status, ...extra }).where(eq(reservations.id, id));
-}
-
-export async function getAllReservations(): Promise<Reservation[]> {
+export async function getAllReservations(): Promise<ReservationWithPayment[]> {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(reservations).orderBy(desc(reservations.createdAt));
+  const rows = await db.select().from(reservations).orderBy(desc(reservations.createdAt));
+  const paymentsByReservation = await getLatestPaymentsByReservationIds(rows.map((r) => r.id));
+  return rows.map((r) => flattenReservation(r, paymentsByReservation.get(r.id)));
+}
+
+export async function getReservationsByTripId(tripId: number): Promise<Reservation[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(reservations).where(eq(reservations.tripId, tripId));
+}
+
+export async function getReservationsWithPaymentsByTripId(tripId: number): Promise<ReservationWithPayment[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select().from(reservations).where(eq(reservations.tripId, tripId));
+  const paymentsByReservation = await getLatestPaymentsByReservationIds(rows.map((r) => r.id));
+  return rows.map((r) => flattenReservation(r, paymentsByReservation.get(r.id)));
 }
 
 export async function deleteReservationsByTripId(tripId: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
+  const rows = await db
+    .select({ id: reservations.id })
+    .from(reservations)
+    .where(eq(reservations.tripId, tripId));
+  await deletePaymentsByReservationIds(rows.map((r) => r.id));
   await db.delete(reservations).where(eq(reservations.tripId, tripId));
+}
+
+// ─── Payments ─────────────────────────────────────────────────────────────────
+export async function createPaymentWithItems(data: {
+  reservationId: number;
+  method: PaymentMethod;
+  chargeType: ChargeType;
+  items: { type: PaymentItemType; amount: number; label: string }[];
+}): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const totalAmount = data.items.reduce((sum, item) => sum + item.amount, 0);
+  const result = await db.insert(payments).values({
+    reservationId: data.reservationId,
+    totalAmount,
+    status: "paid",
+    method: data.method,
+    chargeType: data.chargeType,
+    paidAt: new Date(),
+  });
+  const paymentId = (result[0] as any).insertId;
+  if (data.items.length > 0) {
+    await db.insert(paymentItems).values(
+      data.items.map((item) => ({
+        paymentId,
+        type: item.type,
+        amount: item.amount,
+        label: item.label,
+      }))
+    );
+  }
+  return paymentId;
+}
+
+export async function getLatestPaymentByReservationId(reservationId: number): Promise<Payment | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db
+    .select()
+    .from(payments)
+    .where(eq(payments.reservationId, reservationId))
+    .orderBy(desc(payments.id))
+    .limit(1);
+  return result[0];
+}
+
+export async function getLatestPaymentsByReservationIds(
+  reservationIds: number[]
+): Promise<Map<number, Payment>> {
+  const map = new Map<number, Payment>();
+  if (reservationIds.length === 0) return map;
+  const db = await getDb();
+  if (!db) return map;
+  const rows = await db.select().from(payments).where(inArray(payments.reservationId, reservationIds));
+  for (const row of rows) {
+    const existing = map.get(row.reservationId);
+    if (!existing || row.id > existing.id) {
+      map.set(row.reservationId, row);
+    }
+  }
+  return map;
+}
+
+export async function updatePaymentStatus(
+  id: number,
+  status: Payment["status"],
+  extra?: Partial<Payment>
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(payments).set({ status, ...extra }).where(eq(payments.id, id));
+}
+
+export async function getPaymentItemsByPaymentId(paymentId: number): Promise<PaymentItem[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(paymentItems).where(eq(paymentItems.paymentId, paymentId));
+}
+
+export async function getPaymentItemsByPaymentIds(paymentIds: number[]): Promise<PaymentItem[]> {
+  if (paymentIds.length === 0) return [];
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(paymentItems).where(inArray(paymentItems.paymentId, paymentIds));
+}
+
+export async function getPaidPaymentItemTotalsByType(): Promise<Record<PaymentItemType, number>> {
+  const totals: Record<PaymentItemType, number> = { fare: 0, theme_fee: 0, discount: 0 };
+  const db = await getDb();
+  if (!db) return totals;
+  const rows = await db
+    .select({ type: paymentItems.type, amount: paymentItems.amount })
+    .from(paymentItems)
+    .innerJoin(payments, eq(paymentItems.paymentId, payments.id))
+    .where(eq(payments.status, "paid"));
+  for (const row of rows) {
+    totals[row.type] += row.amount;
+  }
+  return totals;
+}
+
+export async function deletePaymentsByReservationIds(reservationIds: number[]): Promise<void> {
+  if (reservationIds.length === 0) return;
+  const db = await getDb();
+  if (!db) return;
+  const paymentRows = await db
+    .select({ id: payments.id })
+    .from(payments)
+    .where(inArray(payments.reservationId, reservationIds));
+  const paymentIds = paymentRows.map((p) => p.id);
+  if (paymentIds.length > 0) {
+    await db.delete(paymentItems).where(inArray(paymentItems.paymentId, paymentIds));
+  }
+  await db.delete(payments).where(inArray(payments.reservationId, reservationIds));
 }
 
 // ─── Points ───────────────────────────────────────────────────────────────────

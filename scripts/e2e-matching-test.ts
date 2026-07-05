@@ -1,4 +1,5 @@
 /* eslint-disable no-console */
+import "dotenv/config";
 import { appRouter } from "../server/routers";
 import * as db from "../server/db";
 import { createPool } from "mysql2/promise";
@@ -193,6 +194,14 @@ async function cleanup(eventId: number) {
     const trips = await conn.query("SELECT id FROM trips WHERE eventId = ?", [eventId]);
     const tripIds = (trips[0] as any[]).map((r) => r.id);
     for (const tripId of tripIds) {
+      await conn.query(
+        "DELETE FROM payment_items WHERE paymentId IN (SELECT id FROM payments WHERE reservationId IN (SELECT id FROM reservations WHERE tripId = ?))",
+        [tripId]
+      );
+      await conn.query(
+        "DELETE FROM payments WHERE reservationId IN (SELECT id FROM reservations WHERE tripId = ?)",
+        [tripId]
+      );
       await conn.query("DELETE FROM reservations WHERE tripId = ?", [tripId]);
       await conn.query("DELETE FROM boarding_points WHERE tripId = ?", [tripId]);
     }

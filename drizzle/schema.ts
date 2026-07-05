@@ -8,6 +8,7 @@ import {
   decimal,
   boolean,
   json,
+  date,
   index,
 } from "drizzle-orm/mysql-core";
 
@@ -22,6 +23,10 @@ export const users = mysqlTable("users", {
   phone: varchar("phone", { length: 20 }),
   referralCode: varchar("referralCode", { length: 16 }).unique(),
   pointsBalance: int("pointsBalance").default(0).notNull(),
+  gender: mysqlEnum("gender", ["M", "F"]),
+  birthDate: date("birthDate"),
+  verifiedAt: timestamp("verifiedAt"),
+  verificationProvider: varchar("verificationProvider", { length: 50 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
@@ -92,6 +97,8 @@ export const trips = mysqlTable("trips", {
   notes: text("notes"),
   creatorId: int("creatorId"),
   sourceClusterId: int("sourceClusterId"),
+  theme: varchar("theme", { length: 20 }).default("standard").notNull(),
+  themeConfig: json("themeConfig"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -123,26 +130,84 @@ export const reservations = mysqlTable("reservations", {
   tripId: int("tripId").notNull(),
   boardingPointId: int("boardingPointId"),
   seats: int("seats").default(1).notNull(),
-  status: mysqlEnum("status", ["pending", "paid", "cancelled", "refunded"])
-    .default("pending")
-    .notNull(),
-  totalAmount: int("totalAmount").notNull(),
+  seatNo: varchar("seatNo", { length: 10 }),
   pointsUsed: int("pointsUsed").default(0).notNull(),
   passengerName: varchar("passengerName", { length: 100 }),
   passengerPhone: varchar("passengerPhone", { length: 20 }),
   passengerEmail: varchar("passengerEmail", { length: 320 }),
-  paymentId: varchar("paymentId", { length: 200 }),
-  paymentMethod: varchar("paymentMethod", { length: 50 }),
   qrToken: varchar("qrToken", { length: 64 }),
   referralCode: varchar("referralCode", { length: 16 }),
-  cancelledAt: timestamp("cancelledAt"),
-  cancelReason: text("cancelReason"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
 export type Reservation = typeof reservations.$inferSelect;
 export type InsertReservation = typeof reservations.$inferInsert;
+
+// ─── Payments ─────────────────────────────────────────────────────────────────
+export const PAYMENT_METHODS = [
+  "card",
+  "kakaopay",
+  "naverpay",
+  "tosspay",
+  "transfer",
+  "vbank",
+  "mock",
+] as const;
+export const CHARGE_TYPES = ["billing", "prepaid"] as const;
+export const PAYMENT_CANCEL_REASONS = [
+  "user_request",
+  "trip_not_confirmed",
+  "admin",
+  "payment_failed",
+] as const;
+export const PAYMENT_ITEM_TYPES = ["fare", "theme_fee", "discount"] as const;
+
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+export type ChargeType = (typeof CHARGE_TYPES)[number];
+export type PaymentCancelReason = (typeof PAYMENT_CANCEL_REASONS)[number];
+export type PaymentItemType = (typeof PAYMENT_ITEM_TYPES)[number];
+
+export const payments = mysqlTable(
+  "payments",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    reservationId: int("reservationId").notNull(),
+    totalAmount: int("totalAmount").notNull(),
+    status: mysqlEnum("status", ["pending", "paid", "cancelled", "refunded"])
+      .default("pending")
+      .notNull(),
+    method: mysqlEnum("method", PAYMENT_METHODS).notNull(),
+    chargeType: mysqlEnum("chargeType", CHARGE_TYPES).default("prepaid").notNull(),
+    paidAt: timestamp("paidAt"),
+    cancelledAt: timestamp("cancelledAt"),
+    cancelReason: mysqlEnum("cancelReason", PAYMENT_CANCEL_REASONS),
+    cancelNote: varchar("cancelNote", { length: 300 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [index("payments_reservation_idx").on(table.reservationId)]
+);
+
+export type Payment = typeof payments.$inferSelect;
+export type InsertPayment = typeof payments.$inferInsert;
+
+// ─── Payment Items ────────────────────────────────────────────────────────────
+export const paymentItems = mysqlTable(
+  "payment_items",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    paymentId: int("paymentId").notNull(),
+    type: mysqlEnum("type", PAYMENT_ITEM_TYPES).notNull(),
+    amount: int("amount").notNull(),
+    label: varchar("label", { length: 100 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [index("payment_items_payment_idx").on(table.paymentId)]
+);
+
+export type PaymentItem = typeof paymentItems.$inferSelect;
+export type InsertPaymentItem = typeof paymentItems.$inferInsert;
 
 // ─── Referrals ────────────────────────────────────────────────────────────────
 export const referrals = mysqlTable("referrals", {
