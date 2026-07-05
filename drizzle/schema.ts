@@ -13,6 +13,9 @@ import {
 } from "drizzle-orm/mysql-core";
 
 // ─── Users ───────────────────────────────────────────────────────────────────
+export const USER_STATUSES = ["active", "suspended"] as const;
+export type UserStatus = (typeof USER_STATUSES)[number];
+
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
   openId: varchar("openId", { length: 64 }).notNull().unique(),
@@ -20,6 +23,7 @@ export const users = mysqlTable("users", {
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
   role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  status: mysqlEnum("status", USER_STATUSES).default("active").notNull(),
   phone: varchar("phone", { length: 20 }),
   referralCode: varchar("referralCode", { length: 16 }).unique(),
   pointsBalance: int("pointsBalance").default(0).notNull(),
@@ -334,3 +338,19 @@ export const rideRequests = mysqlTable(
 
 export type RideRequest = typeof rideRequests.$inferSelect;
 export type InsertRideRequest = typeof rideRequests.$inferInsert;
+
+// ─── Consents ─────────────────────────────────────────────────────────────────
+export const consents = mysqlTable(
+  "consents",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("userId").notNull(),
+    type: varchar("type", { length: 50 }).notNull(),
+    version: varchar("version", { length: 20 }).notNull(),
+    agreedAt: timestamp("agreedAt").defaultNow().notNull(),
+  },
+  (table) => [index("consents_user_type_idx").on(table.userId, table.type)]
+);
+
+export type Consent = typeof consents.$inferSelect;
+export type InsertConsent = typeof consents.$inferInsert;
