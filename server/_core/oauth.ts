@@ -8,9 +8,14 @@ import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
 
 const SUSPENDED_LOGIN_MESSAGE = "정지된 계정입니다. 고객센터에 문의해주세요.";
+const KAKAO_FETCH_TIMEOUT_MS = 10000;
 
 function isSuspended(user: User | undefined): boolean {
   return user?.status === "suspended";
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 }
 
 async function recordTosConsentIfMissing(userId: number): Promise<void> {
@@ -213,6 +218,7 @@ export function registerOAuthRoutes(app: Express) {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded;charset=utf-8" },
         body: tokenBody,
+        signal: AbortSignal.timeout(KAKAO_FETCH_TIMEOUT_MS),
       });
       if (!tokenRes.ok) {
         throw new Error(`Kakao token exchange failed: ${tokenRes.status} ${await tokenRes.text()}`);
@@ -221,6 +227,7 @@ export function registerOAuthRoutes(app: Express) {
 
       const userRes = await fetch("https://kapi.kakao.com/v2/user/me", {
         headers: { Authorization: `Bearer ${tokenData.access_token}` },
+        signal: AbortSignal.timeout(KAKAO_FETCH_TIMEOUT_MS),
       });
       if (!userRes.ok) {
         throw new Error(`Kakao user info fetch failed: ${userRes.status} ${await userRes.text()}`);
@@ -261,6 +268,11 @@ export function registerOAuthRoutes(app: Express) {
 
       res.redirect(302, target);
     } catch (error) {
+      if (isTimeoutError(error)) {
+        console.error("[OAuth] timeout: Kakao API request timed out during login callback", error);
+        res.redirect(302, "/?loginError=timeout");
+        return;
+      }
       console.error("[OAuth] Kakao callback failed", error);
       res.status(500).json({ error: "카카오 로그인에 실패했습니다." });
     }
