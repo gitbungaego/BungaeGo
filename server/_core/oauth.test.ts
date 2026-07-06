@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Express, Request, Response } from "express";
 
 vi.mock("../db", async (importOriginal) => {
@@ -67,9 +67,40 @@ function wrappedMissingTableError() {
   return Object.assign(new Error("Failed query: insert into `users` ..."), { cause });
 }
 
+describe("/app-auth registration gate", () => {
+  const original = process.env.LOCAL_DEV_AUTH;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.LOCAL_DEV_AUTH;
+    else process.env.LOCAL_DEV_AUTH = original;
+  });
+
+  it("is not registered when LOCAL_DEV_AUTH is unset (prevents the unauthenticated admin backdoor in production)", () => {
+    delete process.env.LOCAL_DEV_AUTH;
+    const routes = collectRoutes();
+    expect(routes.has("/app-auth")).toBe(false);
+    expect(routes.has("/api/dev-login")).toBe(false);
+  });
+
+  it("is registered when LOCAL_DEV_AUTH=true", () => {
+    process.env.LOCAL_DEV_AUTH = "true";
+    const routes = collectRoutes();
+    expect(routes.has("/app-auth")).toBe(true);
+    expect(routes.has("/api/dev-login")).toBe(true);
+  });
+});
+
 describe("/app-auth recoverable DB error handling", () => {
+  const originalLocalDevAuth = process.env.LOCAL_DEV_AUTH;
+
+  beforeEach(() => {
+    process.env.LOCAL_DEV_AUTH = "true";
+  });
+
   afterEach(() => {
     vi.mocked(db.upsertUser).mockReset();
+    if (originalLocalDevAuth === undefined) delete process.env.LOCAL_DEV_AUTH;
+    else process.env.LOCAL_DEV_AUTH = originalLocalDevAuth;
   });
 
   it("still sets the session cookie and redirects when upsertUser fails with a recoverable error", async () => {

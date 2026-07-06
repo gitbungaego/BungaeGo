@@ -71,55 +71,58 @@ function getSafeRedirectTarget(req: Request, redirectUri: string | undefined) {
 }
 
 export function registerOAuthRoutes(app: Express) {
-  app.get("/app-auth", async (req: Request, res: Response) => {
-    const redirectUri = getQueryParam(req, "redirectUri");
-    const openId = process.env.OWNER_OPEN_ID || "local-admin-openid";
-    const name = process.env.OWNER_NAME || "관리자";
-
-    try {
-      let user: User | undefined;
-      try {
-        user = await db.upsertUser({
-          openId,
-          name,
-          email: `${openId}@local.dev`,
-          loginMethod: "local-fallback",
-          lastSignedIn: new Date(),
-        });
-      } catch (error) {
-        if (!db.isRecoverableDatabaseError(error)) {
-          throw error;
-        }
-        console.warn("[OAuth] DB unavailable during fallback login, continuing with session", error);
-      }
-
-      if (isSuspended(user)) {
-        res.status(403).json({ error: SUSPENDED_LOGIN_MESSAGE });
-        return;
-      }
-      if (user) await recordTosConsentIfMissing(user.id);
-
-      const sessionToken = await sdk.createSessionToken(openId, {
-        name,
-        expiresInMs: ONE_YEAR_MS,
-      });
-
-      const cookieOptions = getSessionCookieOptions(req);
-      res.cookie(COOKIE_NAME, sessionToken, {
-        ...cookieOptions,
-        maxAge: ONE_YEAR_MS,
-      });
-
-      const target = getSafeRedirectTarget(req, redirectUri);
-      res.redirect(302, target === "/api/oauth/callback" ? "/" : target);
-    } catch (error) {
-      console.error("[OAuth] App auth fallback failed", error);
-      res.status(500).json({ error: "app auth fallback failed" });
-    }
-  });
-
   // ── 로컬 개발 전용 로그인 (LOCAL_DEV_AUTH=true 일 때만 작동) ──
+  // 주의: /app-auth는 인증 없이 OWNER_OPEN_ID로 즉시 세션(관리자 권한 포함)을
+  // 발급하는 백도어이므로, 이 게이트 밖에 두면 프로덕션에서 누구나 GET 한 번으로
+  // 관리자 계정을 탈취할 수 있다. 반드시 LOCAL_DEV_AUTH === "true"일 때만 등록한다.
   if (process.env.LOCAL_DEV_AUTH === "true") {
+    app.get("/app-auth", async (req: Request, res: Response) => {
+      const redirectUri = getQueryParam(req, "redirectUri");
+      const openId = process.env.OWNER_OPEN_ID || "local-admin-openid";
+      const name = process.env.OWNER_NAME || "관리자";
+
+      try {
+        let user: User | undefined;
+        try {
+          user = await db.upsertUser({
+            openId,
+            name,
+            email: `${openId}@local.dev`,
+            loginMethod: "local-fallback",
+            lastSignedIn: new Date(),
+          });
+        } catch (error) {
+          if (!db.isRecoverableDatabaseError(error)) {
+            throw error;
+          }
+          console.warn("[OAuth] DB unavailable during fallback login, continuing with session", error);
+        }
+
+        if (isSuspended(user)) {
+          res.status(403).json({ error: SUSPENDED_LOGIN_MESSAGE });
+          return;
+        }
+        if (user) await recordTosConsentIfMissing(user.id);
+
+        const sessionToken = await sdk.createSessionToken(openId, {
+          name,
+          expiresInMs: ONE_YEAR_MS,
+        });
+
+        const cookieOptions = getSessionCookieOptions(req);
+        res.cookie(COOKIE_NAME, sessionToken, {
+          ...cookieOptions,
+          maxAge: ONE_YEAR_MS,
+        });
+
+        const target = getSafeRedirectTarget(req, redirectUri);
+        res.redirect(302, target === "/api/oauth/callback" ? "/" : target);
+      } catch (error) {
+        console.error("[OAuth] App auth fallback failed", error);
+        res.status(500).json({ error: "app auth fallback failed" });
+      }
+    });
+
     app.get("/api/dev-login", async (req: Request, res: Response) => {
       const openId =
         (req.query.openId as string) ||
