@@ -730,6 +730,40 @@ export async function createReferral(data: InsertReferral): Promise<number> {
   return (result[0] as any).insertId;
 }
 
+// Referral earn is a once-per-pair bonus: if this referrer/referee pair has
+// ever triggered a referral (even a later-cancelled one), they don't get to
+// re-earn it via a new reservation using the same code.
+export async function getReferralByPair(
+  referrerId: number,
+  refereeId: number
+): Promise<Referral | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(referrals)
+    .where(and(eq(referrals.referrerId, referrerId), eq(referrals.refereeId, refereeId)))
+    .limit(1);
+  return rows[0];
+}
+
+export async function getReferralByReservationId(reservationId: number): Promise<Referral | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(referrals)
+    .where(eq(referrals.reservationId, reservationId))
+    .limit(1);
+  return rows[0];
+}
+
+export async function updateReferralStatus(id: number, status: Referral["status"]): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(referrals).set({ status }).where(eq(referrals.id, id));
+}
+
 export async function getUserByReferralCode(code: string): Promise<User | undefined> {
   const db = await getDb();
   if (!db) return undefined;

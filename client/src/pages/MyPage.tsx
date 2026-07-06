@@ -359,8 +359,13 @@ function PointsTab() {
 }
 
 function ReferralsTab() {
-  const { data: codeData, isLoading: codeLoading } = trpc.referrals.myCode.useQuery();
   const { data: referrals, isLoading: refLoading } = trpc.referrals.myList.useQuery();
+  const { data: codeData, isLoading: codeLoading } = trpc.referrals.myCode.useQuery();
+
+  // Only completed referrals count toward stats — cancelled ones (e.g. the
+  // referring reservation was cancelled and the bonus clawed back) must not
+  // inflate the friend count or the earned-points total.
+  const completedReferrals = (referrals ?? []).filter((r) => r.status === "completed");
 
   const shareUrl = codeData?.code
     ? `${window.location.origin}/events?ref=${codeData.code}`
@@ -411,23 +416,25 @@ function ReferralsTab() {
       {/* Referral Stats */}
       <div className="grid grid-cols-2 gap-3">
         <div className="rounded-xl border border-border bg-card p-4 text-center">
-          <p className="text-2xl font-bold text-primary">{referrals?.length ?? 0}</p>
+          <p className="text-2xl font-bold text-primary">{completedReferrals.length}</p>
           <p className="text-xs text-muted-foreground mt-1">초대한 친구</p>
         </div>
         <div className="rounded-xl border border-border bg-card p-4 text-center">
           <p className="text-2xl font-bold text-primary">
-            {((referrals?.length ?? 0) * 2000).toLocaleString()}P
+            {completedReferrals
+              .reduce((sum, r) => sum + r.referrerPoints, 0)
+              .toLocaleString()}P
           </p>
           <p className="text-xs text-muted-foreground mt-1">레퍼럴 적립 포인트</p>
         </div>
       </div>
 
       {/* Referral History */}
-      {!refLoading && referrals && referrals.length > 0 && (
+      {!refLoading && completedReferrals.length > 0 && (
         <div>
           <h3 className="text-sm font-semibold mb-3">초대 내역</h3>
           <div className="space-y-2">
-            {referrals.map((r) => (
+            {completedReferrals.map((r) => (
               <div key={r.id} className="flex items-center justify-between p-3 rounded-lg border border-border bg-card text-sm">
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="h-4 w-4 text-emerald-500" />

@@ -41,6 +41,8 @@ import {
   getPaidPaymentItemTotalsByType,
   getPendingRideRequestsByEventId,
   getPointsByUserId,
+  getReferralByPair,
+  getReferralByReservationId,
   getReferralsByUserId,
   getReservationById,
   getReservationsByUserId,
@@ -59,6 +61,7 @@ import {
   updateEvent,
   updateEventStatus,
   updatePaymentStatus,
+  updateReferralStatus,
   updateRideRequestStatus,
   updateTripStatus,
   updateUserStatus,
@@ -454,16 +457,21 @@ export const appRouter = router({
           await addPoints(ctx.user.id, -input.pointsUsed, "usage", "예약 포인트 사용", String(reservationId));
         }
 
-        // Referral points
+        // Referral points — once per referrer/referee pair, ever (including
+        // pairs whose original referral was later cancelled), so a reserve →
+        // cancel → reserve loop with the same code can't re-earn the bonus.
         if (referrerId) {
-          await createReferral({
-            referrerId,
-            refereeId: ctx.user.id,
-            reservationId,
-            status: "completed",
-          });
-          await addPoints(referrerId, 2000, "referral_earn", "친구 초대 적립", String(reservationId));
-          await addPoints(ctx.user.id, 1000, "referral_earn", "초대 코드 사용 적립", String(reservationId));
+          const existingReferral = await getReferralByPair(referrerId, ctx.user.id);
+          if (!existingReferral) {
+            await createReferral({
+              referrerId,
+              refereeId: ctx.user.id,
+              reservationId,
+              status: "completed",
+            });
+            await addPoints(referrerId, 2000, "referral_earn", "친구 초대 적립", String(reservationId));
+            await addPoints(ctx.user.id, 1000, "referral_earn", "초대 코드 사용 적립", String(reservationId));
+          }
         }
 
         return { id: reservationId };
@@ -492,6 +500,27 @@ export const appRouter = router({
         // Refund points used
         if (res.pointsUsed > 0) {
           await addPoints(ctx.user.id, res.pointsUsed, "refund", "예약 취소 포인트 환불", String(res.id));
+        }
+
+        // Claw back referral bonus this reservation triggered, so a
+        // reserve→cancel loop with a referral code can't farm points.
+        const referral = await getReferralByReservationId(res.id);
+        if (referral && referral.status === "completed") {
+          await addPoints(
+            referral.referrerId,
+            -referral.referrerPoints,
+            "usage",
+            "예약 취소로 인한 추천 적립 회수",
+            String(res.id)
+          );
+          await addPoints(
+            referral.refereeId,
+            -referral.refereePoints,
+            "usage",
+            "예약 취소로 인한 추천 적립 회수",
+            String(res.id)
+          );
+          await updateReferralStatus(referral.id, "cancelled");
         }
 
         return { success: true };
