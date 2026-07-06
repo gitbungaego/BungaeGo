@@ -38,6 +38,23 @@ function marginalDistanceKm(prev: LatLng, next: LatLng, candidate: LatLng): numb
   return (withCandidate - without) / 1000;
 }
 
+// Cost of inserting `candidate` as the new first stop: there's no leg before
+// the current first stop to compare against, so the marginal cost is just the
+// one-way distance to it (not prev===next===stops[0] collapsing to a round trip).
+function prependDistanceKm(currentFirst: LatLng, candidate: LatLng): number {
+  return haversineMeters(candidate, currentFirst) / 1000;
+}
+
+// Cost of inserting `candidate` after the last stop: the route's real final
+// leg goes to the venue, so this must compare against (lastStop -> venue),
+// not collapse to 0 like the middle-insertion formula would if next were
+// treated as the last stop again.
+function appendDistanceKm(currentLast: LatLng, candidate: LatLng, venue: LatLng): number {
+  const withCandidate = haversineMeters(currentLast, candidate) + haversineMeters(candidate, venue);
+  const without = haversineMeters(currentLast, venue);
+  return (withCandidate - without) / 1000;
+}
+
 /**
  * Cheapest-insertion merge: leftover clusters (DBSCAN noise / sub-minPts groups)
  * are inserted into an existing route's stop sequence at the position with the
@@ -48,7 +65,8 @@ function marginalDistanceKm(prev: LatLng, next: LatLng, candidate: LatLng): numb
 export function cheapestInsertion(
   leftoverClusters: MergeCandidateCluster[],
   routes: MergeTargetRoute[],
-  params: MergeParams
+  params: MergeParams,
+  venue: LatLng
 ): MergeResult {
   const workingRoutes = routes.map((r) => ({
     routeIndex: r.routeIndex,
@@ -74,10 +92,12 @@ export function cheapestInsertion(
       if (route.stops.length === 0) continue;
 
       for (let pos = 0; pos <= route.stops.length; pos++) {
-        const prev = pos === 0 ? route.stops[0] : route.stops[pos - 1];
-        const next = pos === route.stops.length ? route.stops[route.stops.length - 1] : route.stops[pos];
-
-        const detourKm = marginalDistanceKm(prev, next, cluster);
+        const detourKm =
+          pos === 0
+            ? prependDistanceKm(route.stops[0], cluster)
+            : pos === route.stops.length
+              ? appendDistanceKm(route.stops[route.stops.length - 1], cluster, venue)
+              : marginalDistanceKm(route.stops[pos - 1], route.stops[pos], cluster);
         const detourMinutes = (detourKm / params.avgSpeedKmh) * 60;
 
         if (detourKm > params.maxDetourKm || detourMinutes > params.maxDetourMinutes) continue;

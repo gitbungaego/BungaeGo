@@ -189,11 +189,16 @@ export function runMatchingPipeline(input: PipelineInput): PipelineOutput {
       });
     }
 
-    const mergeResult = cheapestInsertion(leftoverClusters, mergeTargetRoutes, {
-      maxDetourMinutes: params.mergeMaxDetourMinutes,
-      maxDetourKm: params.mergeMaxDetourKm,
-      avgSpeedKmh: params.avgSpeedKmh,
-    });
+    const mergeResult = cheapestInsertion(
+      leftoverClusters,
+      mergeTargetRoutes,
+      {
+        maxDetourMinutes: params.mergeMaxDetourMinutes,
+        maxDetourKm: params.mergeMaxDetourKm,
+        avgSpeedKmh: params.avgSpeedKmh,
+      },
+      venue
+    );
 
     for (const mergedItem of mergeResult.merged) {
       const clusterResult = leftoverClusterResultByClusterId.get(mergedItem.clusterId)!;
