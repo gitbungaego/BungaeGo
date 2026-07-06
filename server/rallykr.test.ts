@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { appRouter } from "./routers";
+import { appRouter, validatePointsUsage } from "./routers";
 import { buildFareItems, computeRefundableAmount } from "./payments";
 import { getPolicy, StandardPolicy } from "./matching/confirmPolicy";
 import { filterParticipants } from "./participants";
@@ -481,5 +481,23 @@ describe("admin", () => {
     const result = await caller.admin.stats();
     expect(typeof result.totalEvents).toBe("number");
     expect(typeof result.totalRevenue).toBe("number");
+  });
+});
+
+describe("validatePointsUsage", () => {
+  it("passes when pointsUsed is within both balance and fare amount", () => {
+    expect(() => validatePointsUsage(5000, 10000, 20000)).not.toThrow();
+  });
+
+  it("throws when pointsUsed exceeds the user's balance", () => {
+    expect(() => validatePointsUsage(5000, 1000, 20000)).toThrow();
+  });
+
+  it("throws when pointsUsed exceeds the fare amount, even with enough balance", () => {
+    expect(() => validatePointsUsage(15000, 100000, 10000)).toThrow();
+  });
+
+  it("allows pointsUsed exactly equal to balance or fare amount", () => {
+    expect(() => validatePointsUsage(10000, 10000, 10000)).not.toThrow();
   });
 });

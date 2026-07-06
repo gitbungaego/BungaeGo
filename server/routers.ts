@@ -97,6 +97,16 @@ function resolvePipelineParams(input?: z.infer<typeof pipelineParamsInput>): Pip
   return pipelineParamsSchema.parse(input ?? {});
 }
 
+// ─── Points usage guard ────────────────────────────────────────────────────────
+export function validatePointsUsage(pointsUsed: number, userBalance: number, fareAmount: number): void {
+  if (pointsUsed > userBalance) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "보유 포인트가 부족합니다." });
+  }
+  if (pointsUsed > fareAmount) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "포인트 사용액이 결제 금액을 초과할 수 없습니다." });
+  }
+}
+
 // ─── Trip confirm policy helpers ──────────────────────────────────────────────
 async function maybeConfirmTrip(tripId: number): Promise<void> {
   const trip = await getTripById(tripId);
@@ -385,6 +395,8 @@ export const appRouter = router({
         const trip = await getTripById(input.tripId);
         if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
 
+        validatePointsUsage(input.pointsUsed, ctx.user.pointsBalance, trip.price * input.seats);
+
         // Handle referral (doesn't touch seat capacity, safe outside the lock)
         let referrerId: number | undefined;
         if (input.referralCode) {
@@ -535,7 +547,9 @@ export const appRouter = router({
 
         // Price is always computed server-side from the event's fixed price,
         // never trusted from the client, to prevent price tampering.
-        const totalAmount = event.autoMatchPricePerSeat * input.seats - input.pointsUsed;
+        const fareAmount = event.autoMatchPricePerSeat * input.seats;
+        validatePointsUsage(input.pointsUsed, ctx.user.pointsBalance, fareAmount);
+        const totalAmount = fareAmount - input.pointsUsed;
 
         let referrerId: number | undefined;
         if (input.referralCode) {
