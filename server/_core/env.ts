@@ -10,3 +10,14 @@ export const ENV = {
   kakaoRestApiKey: process.env.KAKAO_REST_API_KEY ?? "",
   kakaoClientSecret: process.env.KAKAO_CLIENT_SECRET ?? "",
 };
+
+const REQUIRED_ENV_VARS = ["JWT_SECRET", "DATABASE_URL"] as const;
+
+// Fail fast at boot rather than silently running with an empty JWT signing
+// key (forgeable sessions) or no database connection string.
+export function validateRequiredEnv(): void {
+  const missing = REQUIRED_ENV_VARS.filter((key) => !process.env[key]);
+  if (missing.length > 0) {
+    throw new Error(`Missing required environment variable(s): ${missing.join(", ")}`);
+  }
+}

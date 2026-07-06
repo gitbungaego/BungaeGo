@@ -7,6 +7,7 @@ import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
+import { validateRequiredEnv } from "./env";
 import { serveStatic, setupVite } from "./vite";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -29,6 +30,8 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
+  validateRequiredEnv();
+
   const app = express();
   // Railway terminates TLS at its edge and forwards over HTTP, setting
   // X-Forwarded-Proto. Without trusting the proxy, req.protocol always
@@ -68,4 +71,7 @@ async function startServer() {
   });
 }
 
-startServer().catch(console.error);
+startServer().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
