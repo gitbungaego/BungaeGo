@@ -208,6 +208,58 @@ describe("trips", () => {
     ).rejects.not.toMatchObject({ code: "FORBIDDEN" });
     delete process.env.FEATURE_THEMES;
   });
+
+  it("create rejects minCount greater than maxCount", async () => {
+    const caller = appRouter.createCaller(makeUserCtx());
+    await expect(
+      caller.trips.create({
+        eventId: 1,
+        minCount: 50,
+        maxCount: 40,
+        price: 10000,
+        departureAt: Date.now(),
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("create accepts minCount equal to maxCount", async () => {
+    const caller = appRouter.createCaller(makeUserCtx());
+    await expect(
+      caller.trips.create({
+        eventId: 1,
+        minCount: 40,
+        maxCount: 40,
+        price: 10000,
+        departureAt: Date.now(),
+      })
+    ).rejects.not.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("create rejects a price above the per-seat cap", async () => {
+    const caller = appRouter.createCaller(makeUserCtx());
+    await expect(
+      caller.trips.create({
+        eventId: 1,
+        minCount: 10,
+        maxCount: 40,
+        price: 2_000_000,
+        departureAt: Date.now(),
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("create accepts a reasonable price under the cap", async () => {
+    const caller = appRouter.createCaller(makeUserCtx());
+    await expect(
+      caller.trips.create({
+        eventId: 1,
+        minCount: 10,
+        maxCount: 40,
+        price: 25000,
+        departureAt: Date.now(),
+      })
+    ).rejects.not.toMatchObject({ code: "BAD_REQUEST" });
+  });
 });
 
 describe("boardingPoints", () => {

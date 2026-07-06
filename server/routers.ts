@@ -265,18 +265,23 @@ export const appRouter = router({
 
     create: protectedProcedure
       .input(
-        z.object({
-          eventId: z.number(),
-          mode: z.enum(["bus", "van"]).default("bus"),
-          minCount: z.number().min(1),
-          maxCount: z.number().min(1),
-          price: z.number().min(0),
-          departureAt: z.number(),
-          returnAt: z.number().optional(),
-          isRoundTrip: z.boolean().default(false),
-          notes: z.string().optional(),
-          theme: z.string().max(20).default("standard"),
-        })
+        z
+          .object({
+            eventId: z.number(),
+            mode: z.enum(["bus", "van"]).default("bus"),
+            minCount: z.number().min(1),
+            maxCount: z.number().min(1),
+            price: z.number().min(0).max(1_000_000, "1인당 요금은 100만원을 초과할 수 없습니다."),
+            departureAt: z.number(),
+            returnAt: z.number().optional(),
+            isRoundTrip: z.boolean().default(false),
+            notes: z.string().optional(),
+            theme: z.string().max(20).default("standard"),
+          })
+          .refine((data) => data.minCount <= data.maxCount, {
+            message: "최소 인원은 최대 인원보다 클 수 없습니다.",
+            path: ["minCount"],
+          })
       )
       .mutation(async ({ input, ctx }) => {
         if (!isThemeAllowed(input.theme)) {
@@ -340,7 +345,13 @@ export const appRouter = router({
           order: z.number().default(0),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ input, ctx }) => {
+        const trip = await getTripById(input.tripId);
+        if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
+        if (trip.creatorId !== ctx.user.id && ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "본인이 만든 셔틀에만 정류장을 추가할 수 있습니다." });
+        }
+
         const id = await createBoardingPoint({
           ...input,
           pickupTime: input.pickupTime ? new Date(input.pickupTime) : undefined,
