@@ -105,7 +105,7 @@ export function buildMysqlPoolConfig(databaseUrl: string): PoolOptions {
 
   let ssl: PoolOptions["ssl"] | undefined;
   if (sslParam === "true" || sslParam === "1") {
-    ssl = { rejectUnauthorized: false };
+    ssl = { rejectUnauthorized: true };
   } else if (sslParam === "false" || sslParam === "0") {
     ssl = undefined;
   } else if (sslParam) {

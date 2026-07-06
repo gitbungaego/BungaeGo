@@ -11,7 +11,7 @@ describe("buildMysqlPoolConfig", () => {
     expect(config.user).toBe("user");
     expect(config.password).toBe("pass");
     expect(config.database).toBe("db");
-    expect(config.ssl).toEqual({ rejectUnauthorized: false });
+    expect(config.ssl).toEqual({ rejectUnauthorized: true });
   });
 
   it("leaves ssl disabled when explicitly false", () => {
