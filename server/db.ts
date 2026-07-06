@@ -698,17 +698,32 @@ export async function addPoints(
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  const user = await getUserById(userId);
-  const currentBalance = user?.pointsBalance ?? 0;
-  const newBalance = currentBalance + amount;
-  await db.update(users).set({ pointsBalance: newBalance }).where(eq(users.id, userId));
-  await db.insert(points).values({
-    userId,
-    type,
-    amount,
-    balanceAfter: newBalance,
-    description,
-    refId,
+
+  // Atomic SET pointsBalance = pointsBalance + ? instead of read-then-write,
+  // so concurrent addPoints calls for the same user can't lose an update.
+  // Wrapped in a transaction so the balanceAfter read-back sees this exact
+  // write (the UPDATE's row lock blocks any other addPoints on this user
+  // until we commit) and the ledger row is written atomically with it.
+  await db.transaction(async (tx) => {
+    await tx
+      .update(users)
+      .set({ pointsBalance: sql`${users.pointsBalance} + ${amount}` })
+      .where(eq(users.id, userId));
+
+    const [row] = await tx
+      .select({ pointsBalance: users.pointsBalance })
+      .from(users)
+      .where(eq(users.id, userId));
+    const newBalance = row?.pointsBalance ?? amount;
+
+    await tx.insert(points).values({
+      userId,
+      type,
+      amount,
+      balanceAfter: newBalance,
+      description,
+      refId,
+    });
   });
 }
 
