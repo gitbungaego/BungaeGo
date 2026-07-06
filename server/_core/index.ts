@@ -1,9 +1,11 @@
 import "dotenv/config";
 import express from "express";
+import helmet from "helmet";
 import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
+import { authRateLimiter, globalRateLimiter, writeMutationRateLimiter } from "./rateLimiters";
 import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
@@ -39,14 +41,31 @@ async function startServer() {
   // it (e.g. the Kakao OAuth redirect_uri, which must match https exactly).
   app.set("trust proxy", 1);
   const server = createServer(app);
-  // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+  // contentSecurityPolicy is disabled: Vite's dev middleware needs inline
+  // scripts/eval and a WebSocket connection for HMR, and in production this
+  // app loads the Kakao Maps SDK from dapi.kakao.com, which a default CSP
+  // would block. The rest of helmet's headers (HSTS, X-Content-Type-Options,
+  // X-Frame-Options, etc.) apply in both modes. A tailored production CSP
+  // allowlisting the known external origins would be a good follow-up.
+  app.use(helmet({ contentSecurityPolicy: false }));
+  app.use(globalRateLimiter);
+
+  // Body parsers are scoped per route group instead of applied globally, so
+  // tRPC (small JSON payloads) gets a tight cap while a future storage-proxy
+  // upload route keeps room for larger bodies - a single global parser can't
+  // express two different limits for the same request.
+  app.use("/api/trpc", express.json({ limit: "1mb" }), express.urlencoded({ limit: "1mb", extended: true }));
+  app.use("/manus-storage", express.json({ limit: "50mb" }), express.urlencoded({ limit: "50mb", extended: true }));
+
   registerStorageProxy(app);
+  app.use("/api/oauth", authRateLimiter);
+  app.use("/app-auth", authRateLimiter);
   registerOAuthRoutes(app);
   // tRPC API
   app.use(
     "/api/trpc",
+    writeMutationRateLimiter,
     createExpressMiddleware({
       router: appRouter,
       createContext,
