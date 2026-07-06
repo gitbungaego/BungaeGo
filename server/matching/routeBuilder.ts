@@ -38,6 +38,17 @@ function travelMinutes(a: LatLng, b: LatLng, avgSpeedKmh: number): number {
   return (km / avgSpeedKmh) * 60;
 }
 
+export interface BinPackResult<T> {
+  bins: T[][];
+  /** Demands whose seat count alone exceeds maxCapacity - DBSCAN clusters
+   * by geographic proximity with no seat-count ceiling, so a single demand
+   * can legitimately need more seats than one bus holds. These can't be
+   * placed in any bin (every bin would exceed capacity from this one item
+   * alone), so they're reported separately instead of silently becoming
+   * an over-capacity bin. */
+  oversized: T[];
+}
+
 /**
  * Greedy first-fit-decreasing bin packing by seat count. Determines how many
  * buses are needed and which demands share a bus, independent of stop order.
@@ -45,11 +56,16 @@ function travelMinutes(a: LatLng, b: LatLng, avgSpeedKmh: number): number {
 export function binPackByCapacity<T extends { seats: number }>(
   demands: T[],
   maxCapacity: number
-): T[][] {
+): BinPackResult<T> {
   const sorted = [...demands].sort((a, b) => b.seats - a.seats);
   const bins: { items: T[]; used: number }[] = [];
+  const oversized: T[] = [];
 
   for (const demand of sorted) {
+    if (demand.seats > maxCapacity) {
+      oversized.push(demand);
+      continue;
+    }
     let placed = false;
     for (const bin of bins) {
       if (bin.used + demand.seats <= maxCapacity) {
@@ -64,7 +80,7 @@ export function binPackByCapacity<T extends { seats: number }>(
     }
   }
 
-  return bins.map((b) => b.items);
+  return { bins: bins.map((b) => b.items), oversized };
 }
 
 /**
@@ -157,6 +173,37 @@ export function twoOptImprove<T extends LatLng>(
   return best;
 }
 
+/**
+ * Back-calculates each stop's pickup time by working backward from the
+ * target arrival at the venue: last stop -> venue leg first, then each
+ * preceding stop, subtracting travel time and dwell time at every step.
+ * Reusable after any operation that changes a route's stop order or count
+ * (e.g. cheapest-insertion merge) - not just initial construction - so the
+ * schedule always reflects the actual, current stop sequence.
+ */
+export function recomputePickupTimes<T extends LatLng>(
+  orderedStops: T[],
+  venue: LatLng,
+  targetArrivalAt: Date,
+  avgSpeedKmh: number,
+  stopDwellMinutes: number
+): (T & { pickupTime: Date })[] {
+  const pickupTimes: Date[] = new Array(orderedStops.length);
+  let nextPointTime = targetArrivalAt.getTime();
+  let nextPoint: LatLng = venue;
+
+  for (let i = orderedStops.length - 1; i >= 0; i--) {
+    const stop = orderedStops[i];
+    const travel = travelMinutes(stop, nextPoint, avgSpeedKmh);
+    const pickupTime = new Date(nextPointTime - travel * 60000 - stopDwellMinutes * 60000);
+    pickupTimes[i] = pickupTime;
+    nextPointTime = pickupTime.getTime();
+    nextPoint = stop;
+  }
+
+  return orderedStops.map((stop, index) => ({ ...stop, pickupTime: pickupTimes[index] }));
+}
+
 function buildSingleRoute(
   demands: StopDemand[],
   params: RouteBuilderParams
@@ -168,27 +215,15 @@ function buildSingleRoute(
   // Target arrival is the deadline shared by every stop in this route.
   const targetArrivalAt = demands[0].targetArrivalAt;
 
-  const pickupTimes: Date[] = new Array(tour.length);
-  let nextPointTime = targetArrivalAt.getTime();
-  let nextPoint: LatLng = venue;
+  const stopsWithTimes = recomputePickupTimes(
+    tour.map((demand) => ({ clusterId: demand.clusterId, lat: demand.lat, lng: demand.lng, seats: demand.seats })),
+    venue,
+    targetArrivalAt,
+    params.avgSpeedKmh,
+    params.stopDwellMinutes
+  );
 
-  for (let i = tour.length - 1; i >= 0; i--) {
-    const stop = tour[i];
-    const travel = travelMinutes(stop, nextPoint, params.avgSpeedKmh);
-    const pickupTime = new Date(nextPointTime - travel * 60000 - params.stopDwellMinutes * 60000);
-    pickupTimes[i] = pickupTime;
-    nextPointTime = pickupTime.getTime();
-    nextPoint = stop;
-  }
-
-  const stops: RouteStop[] = tour.map((demand, index) => ({
-    clusterId: demand.clusterId,
-    lat: demand.lat,
-    lng: demand.lng,
-    seats: demand.seats,
-    order: index,
-    pickupTime: pickupTimes[index],
-  }));
+  const stops: RouteStop[] = stopsWithTimes.map((stop, index) => ({ ...stop, order: index }));
 
   const totalSeats = demands.reduce((sum, d) => sum + d.seats, 0);
 
@@ -200,9 +235,19 @@ function buildSingleRoute(
   };
 }
 
-export function buildRoutes(demands: StopDemand[], params: RouteBuilderParams): BuiltRoute[] {
-  if (demands.length === 0) return [];
+export interface BuildRoutesResult {
+  routes: BuiltRoute[];
+  /** Demands that alone exceed maxCapacitySeats and so couldn't be placed
+   * on any bus - see BinPackResult.oversized. */
+  oversizedDemands: StopDemand[];
+}
 
-  const bins = binPackByCapacity(demands, params.maxCapacitySeats);
-  return bins.map((bin) => buildSingleRoute(bin, params));
+export function buildRoutes(demands: StopDemand[], params: RouteBuilderParams): BuildRoutesResult {
+  if (demands.length === 0) return { routes: [], oversizedDemands: [] };
+
+  const { bins, oversized } = binPackByCapacity(demands, params.maxCapacitySeats);
+  return {
+    routes: bins.map((bin) => buildSingleRoute(bin, params)),
+    oversizedDemands: oversized,
+  };
 }

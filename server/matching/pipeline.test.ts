@@ -5,7 +5,8 @@ function tightGroup(
   startId: number,
   center: { lat: number; lng: number },
   count: number,
-  targetArrivalAt: Date
+  targetArrivalAt: Date,
+  seatsEach = 1
 ): PipelineRequest[] {
   const out: PipelineRequest[] = [];
   for (let i = 0; i < count; i++) {
@@ -14,7 +15,7 @@ function tightGroup(
       lat: center.lat + (i - count / 2) * 0.0003,
       lng: center.lng,
       targetArrivalAt,
-      seats: 1,
+      seats: seatsEach,
     });
   }
   return out;
@@ -77,5 +78,66 @@ describe("runMatchingPipeline", () => {
     // Every non-failed request should appear in exactly one cluster.
     const allMemberIds = output.clusters.flatMap((c) => c.memberRequestIds);
     expect(new Set(allMemberIds).size).toBe(requests.length);
+  });
+
+  it("fails an over-capacity cluster explicitly, so admin.matching.commit's status !== \"failed\" assignment check never sees a route-less viable cluster", () => {
+    const bucketA = new Date("2026-08-01T18:00:00Z");
+    // 8 requests (meets minPts) x 6 seats = 48 total, exceeding maxCapacitySeats (45).
+    const oversizedGroup = tightGroup(0, { lat: 37.5, lng: 127.0 }, 8, bucketA, 6);
+
+    const input: PipelineInput = {
+      eventId: 1,
+      venue: { lat: 37.4, lng: 127.0 },
+      requests: oversizedGroup,
+      stopCandidates: [],
+      params,
+    };
+
+    const output = runMatchingPipeline(input);
+
+    // No bus was ever built for this cluster.
+    expect(output.routes.length).toBe(0);
+
+    // The cluster itself must be "failed", not left "viable" - a "viable"
+    // status here would be a contradiction: commit() skips assignment only
+    // for status === "failed", so a "viable" cluster with no actual route
+    // would get assigned to a bus that was never built.
+    expect(output.clusters.length).toBe(1);
+    expect(output.clusters[0].status).toBe("failed");
+
+    // And its members must be reported as failed too.
+    const memberIds = oversizedGroup.map((r) => r.id);
+    for (const id of memberIds) {
+      expect(output.failedRequestIds).toContain(id);
+    }
+  });
+
+  it("is deterministic: the same input run twice produces identical output", () => {
+    const bucketA = new Date("2026-08-01T18:00:00Z");
+    const bucketB = new Date("2026-08-01T19:00:00Z");
+
+    const clusterA1 = tightGroup(0, { lat: 37.5, lng: 127.0 }, 10, bucketA);
+    const clusterA2 = tightGroup(100, { lat: 37.55, lng: 127.08 }, 10, bucketA);
+    const clusterB1 = tightGroup(200, { lat: 37.6, lng: 127.15 }, 12, bucketB);
+    const isolated: PipelineRequest = {
+      id: 999,
+      lat: 40.0,
+      lng: 130.0,
+      targetArrivalAt: bucketA,
+      seats: 1,
+    };
+
+    const input: PipelineInput = {
+      eventId: 1,
+      venue: { lat: 37.4, lng: 127.0 },
+      requests: [...clusterA1, ...clusterA2, ...clusterB1, isolated],
+      stopCandidates: [],
+      params,
+    };
+
+    const first = runMatchingPipeline(input);
+    const second = runMatchingPipeline(input);
+
+    expect(second).toEqual(first);
   });
 });

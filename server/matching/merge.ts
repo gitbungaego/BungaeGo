@@ -1,5 +1,5 @@
 import { haversineMeters, type LatLng } from "./haversine";
-import type { RouteStop } from "./routeBuilder";
+import { recomputePickupTimes, type RouteStop } from "./routeBuilder";
 
 export interface MergeCandidateCluster {
   clusterId: number;
@@ -13,6 +13,11 @@ export interface MergeTargetRoute {
   stops: RouteStop[];
   totalSeats: number;
   maxCapacitySeats: number;
+  /** Same deadline the route was originally built against - needed to
+   * re-run the pickup-time back-calculation after an insertion changes
+   * the stop sequence. */
+  targetArrivalAt: Date;
+  stopDwellMinutes: number;
 }
 
 export interface MergeParams {
@@ -60,7 +65,12 @@ function appendDistanceKm(currentLast: LatLng, candidate: LatLng, venue: LatLng)
  * are inserted into an existing route's stop sequence at the position with the
  * lowest marginal detour cost, if that cost stays within the configured bounds.
  * Processed largest-seats-first; each accepted insertion is committed immediately
- * (mutating an in-memory working copy of the route) before evaluating the next cluster.
+ * before evaluating the next cluster.
+ *
+ * Mutates the `routes` array's elements in place (stops/totalSeats) - callers
+ * read the merged result off the same objects they passed in, they are not
+ * reconstructed from the returned MergeResult (which only carries per-cluster
+ * decisions: which route, at what position, at what cost).
  */
 export function cheapestInsertion(
   leftoverClusters: MergeCandidateCluster[],
@@ -68,12 +78,7 @@ export function cheapestInsertion(
   params: MergeParams,
   venue: LatLng
 ): MergeResult {
-  const workingRoutes = routes.map((r) => ({
-    routeIndex: r.routeIndex,
-    stops: [...r.stops],
-    totalSeats: r.totalSeats,
-    maxCapacitySeats: r.maxCapacitySeats,
-  }));
+  const workingRoutes = routes;
 
   const merged: MergeResult["merged"] = [];
   const unmerged: MergeCandidateCluster[] = [];
@@ -119,10 +124,23 @@ export function cheapestInsertion(
       lng: cluster.lng,
       seats: cluster.seats,
       order: best.insertAtOrder,
+      // Placeholder - recomputePickupTimes below fixes every stop's time,
+      // including this one, based on the route's new stop sequence.
       pickupTime: best.route.stops[Math.min(best.insertAtOrder, best.route.stops.length - 1)].pickupTime,
     };
     best.route.stops.splice(best.insertAtOrder, 0, newStop);
-    best.route.stops.forEach((s, i) => (s.order = i));
+
+    // Re-run the back-calculation for the whole route: the new stop shifts
+    // every earlier stop's pickup time, and the inserted stop's own time
+    // must reflect its actual position, not a copy of a neighbor's.
+    const recomputed = recomputePickupTimes(
+      best.route.stops,
+      venue,
+      best.route.targetArrivalAt,
+      params.avgSpeedKmh,
+      best.route.stopDwellMinutes
+    );
+    best.route.stops = recomputed.map((stop, i) => ({ ...stop, order: i }));
     best.route.totalSeats += cluster.seats;
 
     merged.push({

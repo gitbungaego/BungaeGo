@@ -68,12 +68,6 @@ export interface PipelineOutput {
   failedRequestIds: number[];
 }
 
-let syntheticClusterId = -1;
-function nextSyntheticClusterId(): number {
-  syntheticClusterId -= 1;
-  return syntheticClusterId;
-}
-
 function resolveStopForCluster(
   members: PipelineRequest[],
   stopCandidates: PipelineStopCandidate[],
@@ -91,6 +85,15 @@ function resolveStopForCluster(
 
 export function runMatchingPipeline(input: PipelineInput): PipelineOutput {
   const { eventId, venue, requests, stopCandidates, params } = input;
+
+  // Local to each call so two calls (e.g. preview then commit) always assign
+  // the same synthetic ids for the same input, instead of drifting further
+  // negative on every call from a shared module-level counter.
+  let syntheticClusterId = -1;
+  function nextSyntheticClusterId(): number {
+    syntheticClusterId -= 1;
+    return syntheticClusterId;
+  }
 
   const groups = groupRequests(eventId, requests, params.bucketSizeMinutes);
 
@@ -114,6 +117,7 @@ export function runMatchingPipeline(input: PipelineInput): PipelineOutput {
     });
 
     const viableDemands: StopDemand[] = [];
+    const clusterResultByClusterId = new Map<number, PipelineClusterResult>();
 
     for (const rawCluster of rawClusters) {
       const members = rawCluster.map((p) => requestById.get(p.id)!);
@@ -134,6 +138,7 @@ export function runMatchingPipeline(input: PipelineInput): PipelineOutput {
         isAdHocStop: isAdHoc,
       };
       allClusters.push(clusterResult);
+      clusterResultByClusterId.set(clusterId, clusterResult);
 
       const seats = members.reduce((sum, m) => sum + m.seats, 0);
       viableDemands.push({
@@ -145,7 +150,7 @@ export function runMatchingPipeline(input: PipelineInput): PipelineOutput {
       });
     }
 
-    const builtRoutes = buildRoutes(viableDemands, {
+    const { routes: builtRoutes, oversizedDemands } = buildRoutes(viableDemands, {
       maxCapacitySeats: params.maxCapacitySeats,
       minCapacitySeats: params.minCapacitySeats,
       avgSpeedKmh: params.avgSpeedKmh,
@@ -154,11 +159,21 @@ export function runMatchingPipeline(input: PipelineInput): PipelineOutput {
       venueLng: venue.lng,
     });
 
+    // A cluster whose seat count alone exceeds one bus's capacity can't ride
+    // any bus as-is - fail it explicitly instead of silently overpacking a bin.
+    for (const oversizedDemand of oversizedDemands) {
+      const clusterResult = clusterResultByClusterId.get(oversizedDemand.clusterId)!;
+      clusterResult.status = "failed";
+      failedRequestIds.push(...clusterResult.memberRequestIds);
+    }
+
     const mergeTargetRoutes: MergeTargetRoute[] = builtRoutes.map((route, idx) => ({
       routeIndex: idx,
       stops: route.stops,
       totalSeats: route.totalSeats,
       maxCapacitySeats: params.maxCapacitySeats,
+      targetArrivalAt: route.estimatedArrivalAt,
+      stopDwellMinutes: params.stopDwellMinutes,
     }));
 
     // Noise points: each becomes its own single-seat (or multi-seat, if the
@@ -209,6 +224,9 @@ export function runMatchingPipeline(input: PipelineInput): PipelineOutput {
         ...builtRoutes[route.routeIndex],
         stops: route.stops,
         totalSeats: route.totalSeats,
+        // The merge may have shifted every stop's pickup time, including the
+        // first one, so departureAt must be re-derived rather than kept stale.
+        departureAt: route.stops[0]?.pickupTime ?? builtRoutes[route.routeIndex].departureAt,
       };
     }
 
