@@ -37,6 +37,20 @@ export const writeMutationRateLimiter = rateLimit({
   skip: (req) => !isWriteMutationRequest(req.path),
 });
 
+// Static asset / dev-tooling requests never count toward the global budget,
+// in dev or prod: Vite's unbundled dev serving alone fires 100+ requests
+// (HMR client, @fs passthroughs, per-module source, node_modules dep chunks)
+// on a single page load, which isn't API traffic and shouldn't compete with
+// it for the same 100/min budget. /api/* is deliberately never matched here,
+// so it stays rate-limited identically in both environments.
+const DEV_ASSET_PATH_PREFIXES = ["/@vite", "/@fs", "/src", "/node_modules"];
+const DEV_ASSET_EXTENSIONS = [".js", ".ts", ".tsx", ".css"];
+
+export function isStaticAssetRequest(path: string): boolean {
+  if (DEV_ASSET_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))) return true;
+  return DEV_ASSET_EXTENSIONS.some((ext) => path.endsWith(ext));
+}
+
 // Global fallback applied to every request.
 export const globalRateLimiter = rateLimit({
   windowMs: ONE_MINUTE_MS,
@@ -44,4 +58,5 @@ export const globalRateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   handler: sendRateLimited,
+  skip: (req) => isStaticAssetRequest(req.path),
 });
