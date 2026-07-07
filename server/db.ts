@@ -480,6 +480,31 @@ export async function getBoardingPointsByTripId(tripId: number): Promise<Boardin
     .orderBy(boardingPoints.order);
 }
 
+// All boarding points across every trip of an event, for the event-wide
+// rally-point map (EventDetail's map shows every shuttle's stops at once,
+// not just the selected one).
+export async function getBoardingPointsByEventId(eventId: number): Promise<BoardingPoint[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: boardingPoints.id,
+      tripId: boardingPoints.tripId,
+      name: boardingPoints.name,
+      address: boardingPoints.address,
+      lat: boardingPoints.lat,
+      lng: boardingPoints.lng,
+      pickupTime: boardingPoints.pickupTime,
+      order: boardingPoints.order,
+      createdAt: boardingPoints.createdAt,
+      updatedAt: boardingPoints.updatedAt,
+    })
+    .from(boardingPoints)
+    .innerJoin(trips, eq(trips.id, boardingPoints.tripId))
+    .where(eq(trips.eventId, eventId))
+    .orderBy(boardingPoints.tripId, boardingPoints.order);
+}
+
 export async function createBoardingPoint(data: InsertBoardingPoint): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");

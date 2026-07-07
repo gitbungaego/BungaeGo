@@ -34,6 +34,7 @@ import {
   getAllStopCandidates,
   getAllTrips,
   getAllUsers,
+  getBoardingPointsByEventId,
   getBoardingPointsByTripId,
   getEventById,
   getEvents,
@@ -340,6 +341,10 @@ export const appRouter = router({
     byTripId: publicProcedure
       .input(z.object({ tripId: z.number() }))
       .query(({ input }) => getBoardingPointsByTripId(input.tripId)),
+
+    byEventId: publicProcedure
+      .input(z.object({ eventId: z.number() }))
+      .query(({ input }) => getBoardingPointsByEventId(input.eventId)),
 
     create: protectedProcedure
       .input(
