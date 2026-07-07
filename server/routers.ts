@@ -561,6 +561,64 @@ export const appRouter = router({
         return { success: true };
       }),
 
+    // Admin-only escape hatch: bypasses the D-5 cancellation window entirely
+    // and always refunds in full (operator-fault/force-majeure cases — e.g.
+    // an operational problem discovered after D-5, where the user shouldn't
+    // eat the cancellation fee). Which admin acted is recorded in the
+    // payment's cancelNote for audit purposes, since payments has no
+    // dedicated "cancelled by" column.
+    adminCancel: adminProcedure
+      .input(z.object({ id: z.number(), reason: z.string().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        const res = await getReservationById(input.id);
+        if (!res) throw new TRPCError({ code: "NOT_FOUND" });
+        if (res.status === "cancelled") throw new TRPCError({ code: "BAD_REQUEST", message: "이미 취소된 예약입니다." });
+
+        const trip = await getTripById(res.tripId);
+        if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
+
+        const now = new Date();
+        const payment = await getLatestPaymentByReservationId(res.id);
+        if (payment) {
+          const items = await getPaymentItemsByPaymentId(payment.id);
+          const refundTotal = items.reduce(
+            (sum, item) => sum + computeRefundableAmount(item, trip, res.createdAt, now, "admin"),
+            0
+          );
+          await updatePaymentStatus(payment.id, "cancelled", {
+            cancelledAt: now,
+            cancelReason: "admin",
+            cancelNote: `관리자(#${ctx.user.id}) 취소${input.reason ? `: ${input.reason}` : ""} (환불액 ${refundTotal}원)`,
+          });
+        }
+        await decrementTripCount(res.tripId, res.seats);
+
+        if (res.pointsUsed > 0) {
+          await addPoints(res.userId, res.pointsUsed, "refund", "관리자 취소로 인한 포인트 환불", String(res.id));
+        }
+
+        const referral = await getReferralByReservationId(res.id);
+        if (referral && referral.status === "completed") {
+          await addPoints(
+            referral.referrerId,
+            -referral.referrerPoints,
+            "usage",
+            "예약 취소로 인한 추천 적립 회수",
+            String(res.id)
+          );
+          await addPoints(
+            referral.refereeId,
+            -referral.refereePoints,
+            "usage",
+            "예약 취소로 인한 추천 적립 회수",
+            String(res.id)
+          );
+          await updateReferralStatus(referral.id, "cancelled");
+        }
+
+        return { success: true };
+      }),
+
     adminList: adminProcedure.query(() => getAllReservations()),
   }),
 

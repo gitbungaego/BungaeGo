@@ -68,8 +68,9 @@ export function computeRefundableAmount(
   now: Date,
   cancelReason: PaymentCancelReason
 ): number {
-  if (cancelReason === "trip_not_confirmed") {
-    // 트립이 확정되지 못해 취소되는 경우 아이템 타입과 무관하게 전액 환불.
+  if (cancelReason === "trip_not_confirmed" || cancelReason === "admin") {
+    // 트립 미확정 자동환불, 관리자 강제취소(운영자 귀책/불가항력) 모두
+    // 아이템 타입 및 D-5 수수료 등급과 무관하게 전액 환불.
     return item.amount;
   }
   const policy = REFUND_POLICY_REGISTRY[item.type];

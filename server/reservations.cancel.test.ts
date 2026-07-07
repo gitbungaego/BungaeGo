@@ -94,7 +94,7 @@ function fakeFareItem(): PaymentItem {
   };
 }
 
-function makeUserCtx(userId: number): TrpcContext {
+function makeUserCtx(userId: number, role: "user" | "admin" = "user"): TrpcContext {
   return {
     user: {
       id: userId,
@@ -102,7 +102,7 @@ function makeUserCtx(userId: number): TrpcContext {
       name: "Test User",
       email: "user@test.com",
       loginMethod: "manus",
-      role: "user",
+      role,
       status: "active",
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -185,5 +185,57 @@ describe("reservations.cancel - tiered fee policy", () => {
       "cancelled",
       expect.objectContaining({ cancelNote: expect.stringContaining("30000") })
     );
+  });
+});
+
+describe("reservations.adminCancel - bypasses the D-5 restriction", () => {
+  afterEach(() => {
+    vi.mocked(db.getReservationById).mockReset();
+    vi.mocked(db.getTripById).mockReset();
+    vi.mocked(db.getLatestPaymentByReservationId).mockReset();
+    vi.mocked(db.getPaymentItemsByPaymentId).mockReset();
+    vi.mocked(db.updatePaymentStatus).mockReset();
+    vi.mocked(db.decrementTripCount).mockReset();
+    vi.mocked(db.addPoints).mockReset();
+    vi.mocked(db.getReferralByReservationId).mockReset();
+    vi.mocked(db.updateReferralStatus).mockReset();
+    vi.useRealTimers();
+  });
+
+  it("rejects a non-admin user with FORBIDDEN", async () => {
+    const caller = appRouter.createCaller(makeUserCtx(42, "user"));
+    await expect(caller.reservations.adminCancel({ id: 1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(db.getReservationById).not.toHaveBeenCalled();
+  });
+
+  it("lets an admin cancel with full refund at D-4, where the normal cancel would be rejected", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(D4_INSTANT);
+
+    vi.mocked(db.getReservationById).mockResolvedValueOnce(fakeReservation());
+    vi.mocked(db.getTripById).mockResolvedValueOnce(fakeTrip());
+    vi.mocked(db.getLatestPaymentByReservationId).mockResolvedValueOnce({ id: 1 } as any);
+    vi.mocked(db.getPaymentItemsByPaymentId).mockResolvedValueOnce([fakeFareItem()]);
+    vi.mocked(db.getReferralByReservationId).mockResolvedValueOnce(undefined);
+
+    const caller = appRouter.createCaller(makeUserCtx(7, "admin"));
+    const result = await caller.reservations.adminCancel({ id: 1, reason: "차량 고장" });
+
+    expect(result).toEqual({ success: true });
+    expect(db.updatePaymentStatus).toHaveBeenCalledWith(
+      1,
+      "cancelled",
+      expect.objectContaining({
+        cancelReason: "admin",
+        cancelNote: expect.stringContaining("#7"),
+      })
+    );
+    // Full refund (30000), not the tiered D-4 fee that the normal cancel path would apply.
+    expect(db.updatePaymentStatus).toHaveBeenCalledWith(
+      1,
+      "cancelled",
+      expect.objectContaining({ cancelNote: expect.stringContaining("30000") })
+    );
+    expect(db.addPoints).not.toHaveBeenCalled(); // pointsUsed is 0 in fakeReservation()
   });
 });

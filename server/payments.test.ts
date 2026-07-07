@@ -95,6 +95,14 @@ describe("computeRefundableAmount - trip_not_confirmed bypasses the fee tier ent
   });
 });
 
+describe("computeRefundableAmount - admin bypasses the fee tier entirely", () => {
+  it("refunds the fare in full even in the normally-forbidden D-5+ window", () => {
+    const now = new Date("2026-08-19T00:00:00.000Z"); // well past D-5
+    const amount = computeRefundableAmount(fakeItem(), fakeTrip(), RESERVED_LONG_AGO, now, "admin");
+    expect(amount).toBe(30000);
+  });
+});
+
 describe("computeRefundableAmount - unregistered item type", () => {
   it("throws for a theme_fee item under user_request (no policy registered yet)", () => {
     const now = new Date("2026-08-01T00:00:00.000Z");
