@@ -1,6 +1,7 @@
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
+import { evaluateCancellation } from "@shared/cancellationPolicy";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -165,6 +166,16 @@ function ReservationCard({ reservation, onCancel, cancelling }: { reservation: a
     refunded: "bg-gray-50 text-gray-500 border-gray-200",
   };
 
+  const cancellation = trip
+    ? evaluateCancellation(new Date(trip.departureAt), new Date(reservation.createdAt), new Date())
+    : undefined;
+  // Fare before the points discount was applied — totalAmount already nets
+  // pointsUsed out, and the fee only ever applies to the fare portion (points
+  // always come back in full via a separate points-ledger entry).
+  const fareAmount = reservation.totalAmount + reservation.pointsUsed;
+  const expectedRefund =
+    cancellation?.allowed ? Math.round(fareAmount * (1 - cancellation.feeRate)) : 0;
+
   return (
     <div className="rounded-xl border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-3 mb-3">
@@ -191,18 +202,27 @@ function ReservationCard({ reservation, onCancel, cancelling }: { reservation: a
         <span className="font-bold text-primary">{formatPrice(reservation.totalAmount)}</span>
       </div>
 
-      {reservation.status === "paid" && (
-        <div className="mt-3 pt-3 border-t border-border/60 flex justify-end">
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-destructive border-destructive/30 hover:bg-destructive/5 text-xs"
-            onClick={() => onCancel(reservation.id)}
-            disabled={cancelling}
-          >
-            <XCircle className="h-3.5 w-3.5 mr-1" />
-            예약 취소
-          </Button>
+      {reservation.status === "paid" && cancellation && (
+        <div className="mt-3 pt-3 border-t border-border/60">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">
+              {cancellation.allowed
+                ? cancellation.feeRate > 0
+                  ? `취소 수수료 ${cancellation.feeRate * 100}% · 예상 환불액 ${formatPrice(expectedRefund)}`
+                  : `수수료 없음 · 전액 환불 ${formatPrice(expectedRefund)}`
+                : cancellation.reason}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-destructive border-destructive/30 hover:bg-destructive/5 text-xs flex-shrink-0"
+              onClick={() => onCancel(reservation.id)}
+              disabled={cancelling || !cancellation.allowed}
+            >
+              <XCircle className="h-3.5 w-3.5 mr-1" />
+              예약 취소
+            </Button>
+          </div>
         </div>
       )}
     </div>

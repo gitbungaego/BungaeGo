@@ -1,4 +1,5 @@
 import { PaymentCancelReason, PaymentItem, PaymentItemType, Trip } from "../drizzle/schema";
+import { evaluateCancellation } from "@shared/cancellationPolicy";
 import {
   addPoints,
   createPaymentWithItems,
@@ -25,11 +26,30 @@ export function buildFareItems(input: { fareAmount: number; pointsUsed: number }
 
 // ─── Refund policy ────────────────────────────────────────────────────────────
 export interface RefundPolicy {
-  refundableAmount(item: PaymentItem, trip: Trip, now: Date): number;
+  refundableAmount(item: PaymentItem, trip: Trip, reservationCreatedAt: Date, now: Date): number;
 }
 
+// Tiered cancellation fee schedule (see @shared/cancellationPolicy). Only the
+// fare line is subject to the fee — points are never fee-affected (see
+// DiscountRefundPolicy below), so this is the only place the fee percentage
+// actually reduces a refund amount.
 export const FareRefundPolicy: RefundPolicy = {
-  // 기존 규정: 시간 기반 위약금 없이 항상 전액 환불.
+  refundableAmount(item, trip, reservationCreatedAt, now) {
+    const decision = evaluateCancellation(trip.departureAt, reservationCreatedAt, now);
+    // reservations.cancel already rejects the mutation before touching
+    // payments when cancellation isn't allowed, so this branch is defensive
+    // only (e.g. a future caller that forgets to check first).
+    if (!decision.allowed) return 0;
+    return Math.round(item.amount * (1 - decision.feeRate));
+  },
+};
+
+// Points-funded discount is always refunded in full via a separate addPoints
+// call, regardless of the fare cancellation fee tier — points aren't subject
+// to the cancellation fee. This just keeps the per-item refund total (used
+// for the informational cancelNote) consistent with that: the discount line
+// is never reduced by the fare's fee.
+export const DiscountRefundPolicy: RefundPolicy = {
   refundableAmount(item) {
     return item.amount;
   },
@@ -37,12 +57,14 @@ export const FareRefundPolicy: RefundPolicy = {
 
 const REFUND_POLICY_REGISTRY: Partial<Record<PaymentItemType, RefundPolicy>> = {
   fare: FareRefundPolicy,
+  discount: DiscountRefundPolicy,
   // theme_fee: 향후 ThemeFeeRefundPolicy 추가만 하면 됨.
 };
 
 export function computeRefundableAmount(
   item: PaymentItem,
   trip: Trip,
+  reservationCreatedAt: Date,
   now: Date,
   cancelReason: PaymentCancelReason
 ): number {
@@ -54,7 +76,7 @@ export function computeRefundableAmount(
   if (!policy) {
     throw new Error(`No refund policy registered for item type "${item.type}"`);
   }
-  return policy.refundableAmount(item, trip, now);
+  return policy.refundableAmount(item, trip, reservationCreatedAt, now);
 }
 
 // ─── Trip cancellation cascade ────────────────────────────────────────────────
@@ -68,7 +90,7 @@ export async function cancelReservationsForTrip(trip: Trip): Promise<void> {
 
     const items = await getPaymentItemsByPaymentId(payment.id);
     const refundTotal = items.reduce(
-      (sum, item) => sum + computeRefundableAmount(item, trip, now, "trip_not_confirmed"),
+      (sum, item) => sum + computeRefundableAmount(item, trip, reservation.createdAt, now, "trip_not_confirmed"),
       0
     );
 

@@ -39,6 +39,7 @@ import {
   getEvents,
   getLatestPaymentByReservationId,
   getPaidPaymentItemTotalsByType,
+  getPaymentItemsByPaymentId,
   getPendingRideRequestsByEventId,
   getPointsByUserId,
   getReferralByPair,
@@ -66,12 +67,13 @@ import {
   updateTripStatus,
   updateUserStatus,
 } from "./db";
-import { buildFareItems, cancelReservationsForTrip } from "./payments";
+import { buildFareItems, cancelReservationsForTrip, computeRefundableAmount } from "./payments";
 import { CONSENT_VERSIONS, recordConsent } from "./consents";
 import { isThemeAllowed } from "./featureFlags";
 import { getPolicy } from "./matching/confirmPolicy";
 import { notifyTrip } from "./notify/tripMessenger";
 import { runMatchingPipeline, type PipelineParams } from "./matching/pipeline";
+import { evaluateCancellation } from "@shared/cancellationPolicy";
 import { USER_STATUSES } from "../drizzle/schema";
 import type { Trip } from "../drizzle/schema";
 
@@ -498,12 +500,28 @@ export const appRouter = router({
         }
         if (res.status === "cancelled") throw new TRPCError({ code: "BAD_REQUEST", message: "이미 취소된 예약입니다." });
 
+        const trip = await getTripById(res.tripId);
+        if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
+
+        const now = new Date();
+        const decision = evaluateCancellation(trip.departureAt, res.createdAt, now);
+        if (!decision.allowed) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: decision.reason });
+        }
+
         const payment = await getLatestPaymentByReservationId(res.id);
         if (payment) {
+          const items = await getPaymentItemsByPaymentId(payment.id);
+          const refundTotal = items.reduce(
+            (sum, item) => sum + computeRefundableAmount(item, trip, res.createdAt, now, "user_request"),
+            0
+          );
           await updatePaymentStatus(payment.id, "cancelled", {
-            cancelledAt: new Date(),
+            cancelledAt: now,
             cancelReason: "user_request",
-            cancelNote: input.reason,
+            cancelNote: input.reason
+              ? `${input.reason} (환불액 ${refundTotal}원)`
+              : `환불액 ${refundTotal}원`,
           });
         }
         await decrementTripCount(res.tripId, res.seats);

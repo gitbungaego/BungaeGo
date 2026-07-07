@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { appRouter, validatePointsUsage } from "./routers";
-import { buildFareItems, computeRefundableAmount } from "./payments";
+import { buildFareItems } from "./payments";
 import { getPolicy, StandardPolicy } from "./matching/confirmPolicy";
 import { filterParticipants } from "./participants";
 import { buildTripMessage } from "./notify/tripMessenger";
@@ -340,20 +340,9 @@ describe("payments", () => {
     expect(items.find((i) => i.type === "discount")).toMatchObject({ amount: -5000 });
   });
 
-  it("computeRefundableAmount: trip_not_confirmed always refunds full item amount regardless of type", () => {
-    const fakeTrip = { id: 1, price: 30000 } as Trip;
-    const fareItem = { id: 1, paymentId: 1, type: "fare", amount: 30000, label: "셔틀 요금" } as PaymentItem;
-    const discountItem = { id: 2, paymentId: 1, type: "discount", amount: -5000, label: "포인트 할인" } as PaymentItem;
-
-    expect(computeRefundableAmount(fareItem, fakeTrip, new Date(), "trip_not_confirmed")).toBe(30000);
-    expect(computeRefundableAmount(discountItem, fakeTrip, new Date(), "trip_not_confirmed")).toBe(-5000);
-  });
-
-  it("computeRefundableAmount: fare item is fully refundable on user_request (existing rule)", () => {
-    const fakeTrip = { id: 1, price: 30000 } as Trip;
-    const fareItem = { id: 1, paymentId: 1, type: "fare", amount: 30000, label: "셔틀 요금" } as PaymentItem;
-    expect(computeRefundableAmount(fareItem, fakeTrip, new Date(), "user_request")).toBe(30000);
-  });
+  // computeRefundableAmount's tiered cancellation fee behavior (including the
+  // trip_not_confirmed bypass) is covered in server/payments.test.ts, which
+  // exercises it against real departureAt/reservationCreatedAt timing.
 });
 
 describe("confirmPolicy", () => {
