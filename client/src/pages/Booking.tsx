@@ -1,6 +1,7 @@
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
+import { isCreatedAfterOwnD5 } from "@shared/cancellationPolicy";
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
@@ -85,6 +86,9 @@ export default function BookingPage({ tripId }: Props) {
   const totalBeforePoints = trip.price * seats;
   const maxPointsUsable = Math.min(pointsBalance?.balance ?? 0, totalBeforePoints);
   const totalAmount = totalBeforePoints - pointsUsed;
+  const isRushCreatedTrip = isCreatedAfterOwnD5(
+    { departureAt: new Date(trip.departureAt), createdAt: new Date(trip.createdAt) }
+  );
 
   const handleSubmit = () => {
     if (!passengerName || !passengerPhone) {
@@ -140,6 +144,11 @@ export default function BookingPage({ tripId }: Props) {
             </div>
             <span className="text-lg font-bold text-primary">{formatPrice(trip.price)}</span>
           </div>
+          {isRushCreatedTrip && (
+            <p className="text-xs text-amber-600 mt-3 pt-3 border-t border-border/60">
+              이 셔틀은 예약 후 1시간이 지나면 취소가 불가합니다.
+            </p>
+          )}
         </div>
 
         {/* Step Indicator */}

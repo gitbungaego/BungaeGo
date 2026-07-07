@@ -20,6 +20,10 @@ interface TripConfirmedParams {
   departureAt: Date;
 }
 
+interface TripCancelledParams {
+  eventTitle: string;
+}
+
 interface DepartureReminderParams {
   departureAt: Date;
   boardingPointName?: string;
@@ -33,7 +37,11 @@ const TEMPLATES = {
   }),
   tripConfirmed: (p: TripConfirmedParams): TripMessage => ({
     title: "셔틀 확정 안내",
-    body: `[${p.eventTitle}] 셔틀 운행이 확정됐습니다. 출발: ${formatKoDateTime(p.departureAt)}`,
+    body: `[${p.eventTitle}] 셔틀 운행이 확정됐습니다. 출발: ${formatKoDateTime(p.departureAt)}. 확정 이후에는 취소 및 환불이 불가합니다.`,
+  }),
+  tripCancelled: (p: TripCancelledParams): TripMessage => ({
+    title: "셔틀 운행 취소 안내",
+    body: `[${p.eventTitle}] 최소 인원 미달로 셔틀 운행이 취소됐습니다. 결제하신 금액은 전액 환불됩니다.`,
   }),
   departureReminder: (p: DepartureReminderParams): TripMessage => ({
     title: "출발 안내",

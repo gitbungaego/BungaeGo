@@ -29,6 +29,7 @@ import {
   RideRequest,
   StopCandidate,
   Trip,
+  TripCancelReason,
   User,
   UserStatus,
   boardingPoints,
@@ -333,11 +334,14 @@ export async function createTrip(data: InsertTrip): Promise<number> {
 
 export async function updateTripStatus(
   id: number,
-  status: Trip["status"]
+  status: Trip["status"],
+  cancelReason?: TripCancelReason
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
-  await db.update(trips).set({ status }).where(eq(trips.id, id));
+  const patch: Partial<Trip> = { status };
+  if (cancelReason !== undefined) patch.cancelReason = cancelReason;
+  await db.update(trips).set(patch).where(eq(trips.id, id));
 }
 
 // Conditional UPDATE guarded by the current status: only the caller whose
@@ -352,6 +356,29 @@ export async function confirmTripIfCollecting(tripId: number): Promise<boolean> 
     .set({ status: "confirmed" })
     .where(and(eq(trips.id, tripId), eq(trips.status, "collecting")));
   return (result[0] as any).affectedRows > 0;
+}
+
+// Same idempotency guarantee as confirmTripIfCollecting, for the D-5
+// scheduler's auto-cancel branch: only the caller that actually flips
+// collecting -> cancelled gets true back, so the refund cascade and
+// notification never double-fire.
+export async function cancelTripIfCollecting(
+  tripId: number,
+  cancelReason: TripCancelReason
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const result = await db
+    .update(trips)
+    .set({ status: "cancelled", cancelReason })
+    .where(and(eq(trips.id, tripId), eq(trips.status, "collecting")));
+  return (result[0] as any).affectedRows > 0;
+}
+
+export async function getTripsByStatus(status: Trip["status"]): Promise<Trip[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(trips).where(eq(trips.status, status));
 }
 
 export async function incrementTripCount(tripId: number, seats: number): Promise<Trip | undefined> {

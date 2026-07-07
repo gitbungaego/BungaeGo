@@ -10,6 +10,7 @@ import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { validateRequiredEnv } from "./env";
+import { startTripConfirmScheduler } from "../scheduler/tripConfirmScheduler";
 import { serveStatic, setupVite } from "./vite";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -88,6 +89,8 @@ async function startServer() {
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
   });
+
+  startTripConfirmScheduler();
 }
 
 startServer().catch((error) => {

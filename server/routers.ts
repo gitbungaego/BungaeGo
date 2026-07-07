@@ -73,7 +73,7 @@ import { isThemeAllowed } from "./featureFlags";
 import { getPolicy } from "./matching/confirmPolicy";
 import { notifyTrip } from "./notify/tripMessenger";
 import { runMatchingPipeline, type PipelineParams } from "./matching/pipeline";
-import { evaluateCancellation } from "@shared/cancellationPolicy";
+import { evaluateCancellation, isCreatedAfterOwnD5 } from "@shared/cancellationPolicy";
 import { USER_STATUSES } from "../drizzle/schema";
 import type { Trip } from "../drizzle/schema";
 
@@ -113,9 +113,15 @@ export function validatePointsUsage(pointsUsed: number, userBalance: number, far
 }
 
 // ─── Trip confirm policy helpers ──────────────────────────────────────────────
+// Normal trips are no longer confirmed the instant minCount is reached — the
+// D-5 scheduler (server/scheduler/tripConfirmScheduler.ts) makes that call.
+// The only case this instant path still fires for is a trip created after
+// its own D-5 boundary ("급하게 만든 셔틀"), which has no future D-5 judgment
+// moment for the scheduler to act on.
 async function maybeConfirmTrip(tripId: number): Promise<void> {
   const trip = await getTripById(tripId);
   if (!trip) return;
+  if (!isCreatedAfterOwnD5(trip)) return;
   const policy = getPolicy(trip.theme);
   const tripReservations = await getReservationsWithPaymentsByTripId(tripId);
   if (!policy.canConfirm(trip, tripReservations)) return;
@@ -313,7 +319,7 @@ export const appRouter = router({
         const shouldCascadeRefund =
           input.status === "cancelled" && (trip.status === "collecting" || trip.status === "confirmed");
 
-        await updateTripStatus(input.id, input.status);
+        await updateTripStatus(input.id, input.status, input.status === "cancelled" ? "admin_cancel" : undefined);
 
         if (shouldCascadeRefund) {
           await cancelReservationsForTrip(trip);
