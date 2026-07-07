@@ -57,6 +57,13 @@
       "when": 1783262414237,
       "tag": "0007_striped_shotgun",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1783374284354,
+      "tag": "0008_dear_leopardon",
+      "breakpoints": true
     }
   ]
 }

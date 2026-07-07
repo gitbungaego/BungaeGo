@@ -76,6 +76,9 @@ export type Event = typeof events.$inferSelect;
 export type InsertEvent = typeof events.$inferInsert;
 
 // ─── Trips (Shuttles) ─────────────────────────────────────────────────────────
+export const TRIP_CANCEL_REASONS = ["admin_cancel", "min_count_not_met"] as const;
+export type TripCancelReason = (typeof TRIP_CANCEL_REASONS)[number];
+
 export const trips = mysqlTable("trips", {
   id: int("id").autoincrement().primaryKey(),
   eventId: int("eventId").notNull(),
@@ -89,6 +92,7 @@ export const trips = mysqlTable("trips", {
   ])
     .default("collecting")
     .notNull(),
+  cancelReason: mysqlEnum("cancelReason", TRIP_CANCEL_REASONS),
   minCount: int("minCount").default(15).notNull(),
   maxCount: int("maxCount").default(45).notNull(),
   currentCount: int("currentCount").default(0).notNull(),

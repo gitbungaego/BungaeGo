@@ -1,0 +1,1 @@
+ALTER TABLE `trips` ADD `cancelReason` enum('admin_cancel','min_count_not_met');
