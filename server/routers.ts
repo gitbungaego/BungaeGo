@@ -28,6 +28,7 @@ import {
   deleteTrip,
   ensureReferralCode,
   finalizeRideRequestRoute,
+  getActiveRallyPointCandidates,
   getActiveStopCandidates,
   getAllEvents,
   getAllReservations,
@@ -36,6 +37,7 @@ import {
   getAllUsers,
   getBoardingPointsByEventId,
   getBoardingPointsByTripId,
+  getBusAccessibleRallyPointCandidates,
   getEventById,
   getEvents,
   getLatestPaymentByReservationId,
@@ -146,6 +148,30 @@ async function withAvailability(trip: Trip) {
   const policy = getPolicy(trip.theme);
   const tripReservations = await getReservationsWithPaymentsByTripId(trip.id);
   return { ...trip, availability: policy.availability(trip, tripReservations) };
+}
+
+// Combined cluster-snap candidate pool for the matching pipeline: admin-vetted
+// stopCandidates plus community-sourced rallyPointCandidates marked
+// busAccessible. The two tables have independent id sequences, so rally point
+// ids are offset well out of stopCandidates' range before being handed to the
+// pipeline - assignedStopId has no FK constraint, it's purely an opaque
+// lookup key for stopNameById below.
+export const RALLY_POINT_CANDIDATE_ID_OFFSET = 1_000_000;
+
+export async function getMatchingStopCandidates(): Promise<{ id: number; lat: number; lng: number; name: string }[]> {
+  const [stops, rallyPoints] = await Promise.all([
+    getActiveStopCandidates(),
+    getBusAccessibleRallyPointCandidates(),
+  ]);
+  return [
+    ...stops.map((s) => ({ id: s.id, lat: Number(s.lat), lng: Number(s.lng), name: s.name })),
+    ...rallyPoints.map((r) => ({
+      id: RALLY_POINT_CANDIDATE_ID_OFFSET + r.id,
+      lat: Number(r.lat),
+      lng: Number(r.lng),
+      name: r.name,
+    })),
+  ];
 }
 
 export const appRouter = router({
@@ -791,6 +817,11 @@ export const appRouter = router({
       }),
   }),
 
+  // ─── Rally Point Candidates (community-sourced, unverified pickup spots) ─────
+  rallyPointCandidates: router({
+    list: publicProcedure.query(() => getActiveRallyPointCandidates()),
+  }),
+
   // ─── Admin ─────────────────────────────────────────────────────────────────
   admin: router({
     users: adminProcedure.query(() => getAllUsers()),
@@ -838,9 +869,9 @@ export const appRouter = router({
             throw new TRPCError({ code: "BAD_REQUEST", message: "이벤트에 좌표(장소)가 설정되어 있지 않습니다." });
           }
 
-          const [pendingRequests, activeStops] = await Promise.all([
+          const [pendingRequests, stopCandidatesForPipeline] = await Promise.all([
             getPendingRideRequestsByEventId(input.eventId),
-            getActiveStopCandidates(),
+            getMatchingStopCandidates(),
           ]);
 
           const output = runMatchingPipeline({
@@ -853,12 +884,7 @@ export const appRouter = router({
               targetArrivalAt: r.targetArrivalAt,
               seats: r.seats,
             })),
-            stopCandidates: activeStops.map((s) => ({
-              id: s.id,
-              lat: Number(s.lat),
-              lng: Number(s.lng),
-              name: s.name,
-            })),
+            stopCandidates: stopCandidatesForPipeline,
             params: resolvePipelineParams(input.params),
           });
 
@@ -899,11 +925,11 @@ export const appRouter = router({
           await clearRideRequestClusterAssignments(input.eventId);
           await deleteClustersByEventId(input.eventId);
 
-          const [pendingRequests, activeStops] = await Promise.all([
+          const [pendingRequests, stopCandidatesForPipeline] = await Promise.all([
             getPendingRideRequestsByEventId(input.eventId),
-            getActiveStopCandidates(),
+            getMatchingStopCandidates(),
           ]);
-          const stopNameById = new Map(activeStops.map((s) => [s.id, s.name]));
+          const stopNameById = new Map(stopCandidatesForPipeline.map((s) => [s.id, s.name]));
           const requestById = new Map(pendingRequests.map((r) => [r.id, r]));
 
           const output = runMatchingPipeline({
@@ -916,12 +942,7 @@ export const appRouter = router({
               targetArrivalAt: r.targetArrivalAt,
               seats: r.seats,
             })),
-            stopCandidates: activeStops.map((s) => ({
-              id: s.id,
-              lat: Number(s.lat),
-              lng: Number(s.lng),
-              name: s.name,
-            })),
+            stopCandidates: stopCandidatesForPipeline,
             params: resolvedParams,
           });
 

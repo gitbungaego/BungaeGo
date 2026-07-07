@@ -10,6 +10,7 @@ import {
   json,
   date,
   index,
+  uniqueIndex,
 } from "drizzle-orm/mysql-core";
 
 // ─── Users ───────────────────────────────────────────────────────────────────
@@ -273,6 +274,28 @@ export const stopCandidates = mysqlTable("stop_candidates", {
 
 export type StopCandidate = typeof stopCandidates.$inferSelect;
 export type InsertStopCandidate = typeof stopCandidates.$inferInsert;
+
+// ─── Rally Point Candidates (community-sourced, unverified pickup spots) ───────
+// Distinct from stopCandidates: these are crowd-sourced suggestions with a
+// separate confirmation state (busAccessible) rather than admin-vetted stops.
+export const rallyPointCandidates = mysqlTable(
+  "rally_point_candidates",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    name: varchar("name", { length: 200 }).notNull(),
+    region: varchar("region", { length: 100 }).notNull(),
+    lat: decimal("lat", { precision: 10, scale: 7 }).notNull(),
+    lng: decimal("lng", { precision: 10, scale: 7 }).notNull(),
+    busAccessible: boolean("busAccessible").default(false).notNull(),
+    notes: varchar("notes", { length: 300 }),
+    isActive: boolean("isActive").default(true).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("rally_point_candidates_name_region_idx").on(table.name, table.region)]
+);
+
+export type RallyPointCandidate = typeof rallyPointCandidates.$inferSelect;
+export type InsertRallyPointCandidate = typeof rallyPointCandidates.$inferInsert;
 
 // ─── Clusters (DBSCAN output, pre-route) ────────────────────────────────────────
 export const clusters = mysqlTable("clusters", {

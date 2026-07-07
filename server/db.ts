@@ -24,6 +24,7 @@ import {
   PaymentItemType,
   PaymentMethod,
   Point,
+  RallyPointCandidate,
   Referral,
   Reservation,
   RideRequest,
@@ -39,6 +40,7 @@ import {
   paymentItems,
   payments,
   points,
+  rallyPointCandidates,
   referrals,
   reservations,
   rideRequests,
@@ -871,6 +873,25 @@ export async function setStopCandidateActive(id: number, active: boolean): Promi
   const db = await getDb();
   if (!db) return;
   await db.update(stopCandidates).set({ active }).where(eq(stopCandidates.id, id));
+}
+
+// ─── Rally Point Candidates ─────────────────────────────────────────────────────
+// Community-sourced pickup spot suggestions. Distinct from stopCandidates: every
+// active one (verified or not) is shown on the map, but only busAccessible ones
+// are offered to the matching pipeline as cluster-snap targets.
+export async function getActiveRallyPointCandidates(): Promise<RallyPointCandidate[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(rallyPointCandidates).where(eq(rallyPointCandidates.isActive, true));
+}
+
+export async function getBusAccessibleRallyPointCandidates(): Promise<RallyPointCandidate[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(rallyPointCandidates)
+    .where(and(eq(rallyPointCandidates.isActive, true), eq(rallyPointCandidates.busAccessible, true)));
 }
 
 // ─── Clusters ─────────────────────────────────────────────────────────────────
