@@ -223,3 +223,54 @@ export function createBoardingPointMarker(map: any, position: MapLatLng, options
     yAnchor: 0.5,
   });
 }
+
+// Same brand yellow as boarding points - demand is "riders who would use a
+// boarding point here", so the two are deliberately in the same color family.
+const DEMAND_CIRCLE_COLOR = "#FEE500";
+
+export interface DemandCircleOptions {
+  radiusMeters: number;
+  onClick?: () => void;
+}
+
+/** Translucent radius circle for a demand grid cell. Click-through via onClick, not hover. */
+export function createDemandCircle(map: any, position: MapLatLng, { radiusMeters, onClick }: DemandCircleOptions) {
+  const { kakao } = window;
+  const circle = new kakao.maps.Circle({
+    center: new kakao.maps.LatLng(position.lat, position.lng),
+    radius: radiusMeters,
+    strokeWeight: 1,
+    strokeColor: DEMAND_CIRCLE_COLOR,
+    strokeOpacity: 0.8,
+    strokeStyle: "solid",
+    fillColor: DEMAND_CIRCLE_COLOR,
+    fillOpacity: 0.35,
+    map,
+  });
+  if (onClick) {
+    kakao.maps.event.addListener(circle, "click", onClick);
+  }
+  return circle;
+}
+
+/** Small dark-on-white tooltip bubble anchored above a point, e.g. for a clicked demand circle. */
+export function createTooltipOverlay(map: any, position: MapLatLng, text: string) {
+  const { kakao } = window;
+  const content = document.createElement("div");
+  content.textContent = text;
+  content.style.background = "#111827";
+  content.style.color = "#ffffff";
+  content.style.fontSize = "12px";
+  content.style.fontWeight = "600";
+  content.style.padding = "6px 10px";
+  content.style.borderRadius = "8px";
+  content.style.whiteSpace = "nowrap";
+  content.style.boxShadow = "0 2px 8px rgba(0,0,0,0.25)";
+
+  return new kakao.maps.CustomOverlay({
+    map,
+    position: new kakao.maps.LatLng(position.lat, position.lng),
+    content,
+    yAnchor: 1.4,
+  });
+}

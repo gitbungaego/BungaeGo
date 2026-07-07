@@ -15,23 +15,50 @@ import {
 } from "@/lib/constants";
 import { ArrowLeft, Bus, Calendar, Clock, MapPin, Users } from "lucide-react";
 import { Link, useLocation } from "wouter";
-import { MapView, createBoardingPointMarker } from "@/components/Map";
+import { MapView, createBoardingPointMarker, createDemandCircle, createDotMarker, createTooltipOverlay } from "@/components/Map";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 interface Props {
   id: number;
 }
 
+// Demand circle radius scales with rider count in a grid cell, clamped so a
+// single request is still visible and a large cluster doesn't swallow the map.
+const MIN_DEMAND_RADIUS_M = 250;
+const MAX_DEMAND_RADIUS_M = 1200;
+const RADIUS_STEP_PER_RIDER_M = 150;
+
+function demandRadiusMeters(count: number): number {
+  return Math.min(MAX_DEMAND_RADIUS_M, MIN_DEMAND_RADIUS_M + (count - 1) * RADIUS_STEP_PER_RIDER_M);
+}
+
+// Distinct from the yellow (boarding points/demand) and gray (muted boarding
+// points) already in use, so confirmed-vs-unconfirmed rally point candidates
+// read as their own category rather than blending into either.
+const CANDIDATE_CONFIRMED_COLOR = "#0284C7";
+const CANDIDATE_UNCONFIRMED_COLOR = "#BAE6FD";
+
 export default function EventDetailPage({ id }: Props) {
   const [, navigate] = useLocation();
   const { data: event, isLoading: eventLoading } = trpc.events.byId.useQuery({ id });
   const { data: trips, isLoading: tripsLoading } = trpc.trips.byEventId.useQuery({ eventId: id });
   const { data: allBoardingPoints } = trpc.boardingPoints.byEventId.useQuery({ eventId: id });
+  const { data: demandCells } = trpc.rideRequests.demandByEvent.useQuery(
+    { eventId: id },
+    { enabled: !!event?.autoMatchEnabled }
+  );
+  const { data: rallyPointCandidates } = trpc.rallyPointCandidates.list.useQuery(
+    undefined,
+    { enabled: !!event?.autoMatchEnabled }
+  );
 
   const [selectedTripId, setSelectedTripId] = useState<number | null>(null);
   const [map, setMap] = useState<any>(null);
   const [highlightedTripId, setHighlightedTripId] = useState<number | null>(null);
   const markersRef = useRef<any[]>([]);
+  const demandMarkersRef = useRef<any[]>([]);
+  const demandTooltipRef = useRef<any>(null);
+  const candidateMarkersRef = useRef<any[]>([]);
   const tripCardRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   const selectedTrip = trips?.find((t) => t.id === selectedTripId) ?? trips?.[0];
@@ -62,9 +89,9 @@ export default function EventDetailPage({ id }: Props) {
 
   // Event-wide rally-point layer: the venue plus every trip's boarding
   // points, re-rendered whenever the map instance, the point list, or the
-  // selected trip changes (not just once at map init). Phase 2's demand
-  // layer (rider origin points) is expected to follow this same shape - its
-  // own effect + marker-ref array drawn on the same `map` instance.
+  // selected trip changes (not just once at map init). The demand and rally
+  // point candidate layers below follow this same shape - their own effect +
+  // marker-ref array drawn on the same `map` instance.
   useEffect(() => {
     if (!map || !window.kakao || !event) return;
 
@@ -113,11 +140,67 @@ export default function EventDetailPage({ id }: Props) {
     }
   }, [map, allBoardingPoints, selectedTrip?.id, selectedTripPoints, event, selectTripFromMarker]);
 
-  // Belt-and-suspenders cleanup on unmount (the effect above already clears
+  // Demand layer: one translucent circle per grid cell, radius scaled by
+  // rider count. Always shown alongside the rally-point layer above when the
+  // event auto-matches - no visibility toggle, per current data scale.
+  useEffect(() => {
+    if (!map || !window.kakao) return;
+
+    demandMarkersRef.current.forEach((circle) => circle.setMap(null));
+    demandMarkersRef.current = [];
+    demandTooltipRef.current?.setMap(null);
+    demandTooltipRef.current = null;
+
+    (demandCells ?? []).forEach((cell) => {
+      const circle = createDemandCircle(
+        map,
+        { lat: cell.lat, lng: cell.lng },
+        {
+          radiusMeters: demandRadiusMeters(cell.count),
+          onClick: () => {
+            demandTooltipRef.current?.setMap(null);
+            demandTooltipRef.current = createTooltipOverlay(
+              map,
+              { lat: cell.lat, lng: cell.lng },
+              `이 근처 ${cell.count}명이 출발을 원하고 있어요`
+            );
+          },
+        }
+      );
+      demandMarkersRef.current.push(circle);
+    });
+  }, [map, demandCells]);
+
+  // Rally point candidate layer: every active candidate, dark dot when its
+  // bus access is confirmed, pale dot while unconfirmed. Only busAccessible
+  // ones are ever offered to the matching pipeline as snap targets - this
+  // layer shows both so unconfirmed suggestions stay visible on the map.
+  useEffect(() => {
+    if (!map || !window.kakao) return;
+
+    candidateMarkersRef.current.forEach((marker) => marker.setMap(null));
+    candidateMarkersRef.current = [];
+
+    (rallyPointCandidates ?? []).forEach((candidate) => {
+      const confirmed = candidate.busAccessible;
+      const marker = createDotMarker(
+        map,
+        { lat: Number(candidate.lat), lng: Number(candidate.lng) },
+        confirmed ? CANDIDATE_CONFIRMED_COLOR : CANDIDATE_UNCONFIRMED_COLOR,
+        `${candidate.name} · ${confirmed ? "정차 확인됨" : "정차 확인 중"}`
+      );
+      candidateMarkersRef.current.push(marker);
+    });
+  }, [map, rallyPointCandidates]);
+
+  // Belt-and-suspenders cleanup on unmount (each effect above already clears
   // its own markers at the start of every re-run).
   useEffect(() => {
     return () => {
       markersRef.current.forEach((marker) => marker.setMap(null));
+      demandMarkersRef.current.forEach((circle) => circle.setMap(null));
+      demandTooltipRef.current?.setMap(null);
+      candidateMarkersRef.current.forEach((marker) => marker.setMap(null));
     };
   }, []);
 
@@ -142,6 +225,9 @@ export default function EventDetailPage({ id }: Props) {
   }
 
   const hasBoardingPoints = (allBoardingPoints?.length ?? 0) > 0;
+  const hasDemand = (demandCells?.length ?? 0) > 0;
+  const showEmptyMapOverlay = !hasBoardingPoints && !hasDemand;
+  const showJoinCta = event.autoMatchEnabled && !event.matchingFrozenAt;
 
   return (
     <div className="py-8">
@@ -245,7 +331,7 @@ export default function EventDetailPage({ id }: Props) {
                 }
                 initialZoom={12}
               />
-              {!hasBoardingPoints && (
+              {showEmptyMapOverlay && (
                 <div className="absolute inset-0 flex items-end sm:items-center justify-center bg-gradient-to-t from-black/50 via-black/10 to-transparent p-4 pointer-events-none">
                   <div className="pointer-events-auto bg-white rounded-xl border border-border shadow-lg p-4 max-w-sm w-full text-center space-y-2">
                     <p className="text-sm font-medium">아직 랠리 포인트가 없어요</p>
@@ -262,6 +348,14 @@ export default function EventDetailPage({ id }: Props) {
                       )}
                     </Button>
                   </div>
+                </div>
+              )}
+
+              {showJoinCta && (
+                <div className="absolute bottom-3 right-3 z-10">
+                  <Button asChild size="sm" className="rounded-full shadow-lg">
+                    <Link href={`/events/${event.id}/join`}>🙋 나도 여기서 출발할래요</Link>
+                  </Button>
                 </div>
               )}
             </div>
