@@ -177,3 +177,49 @@ export function createDotMarker(map: any, position: MapLatLng, color: string, ti
     yAnchor: 0.5,
   });
 }
+
+export interface BoardingPointMarkerOptions {
+  /** Number/text shown inside the marker, e.g. pickup order for the selected trip. */
+  label?: string;
+  /** Muted (gray/translucent) styling for a boarding point that belongs to a non-selected trip. */
+  muted?: boolean;
+  title?: string;
+  onClick?: () => void;
+}
+
+// Kakao brand yellow, matching the app's Kakao-login button elsewhere.
+const BOARDING_POINT_COLOR = "#FEE500";
+
+/**
+ * Numbered circular marker for a trip's boarding point. Highlighted
+ * (brand-yellow, numbered) for the selected trip's stops, muted (gray,
+ * translucent) for every other trip's stops shown on the same event-wide map.
+ */
+export function createBoardingPointMarker(map: any, position: MapLatLng, options: BoardingPointMarkerOptions = {}) {
+  const { label, muted = false, title, onClick } = options;
+  const { kakao } = window;
+  const content = document.createElement("div");
+  content.style.display = "flex";
+  content.style.alignItems = "center";
+  content.style.justifyContent = "center";
+  content.style.width = "26px";
+  content.style.height = "26px";
+  content.style.borderRadius = "50%";
+  content.style.fontSize = "11px";
+  content.style.fontWeight = "700";
+  content.style.color = muted ? "#4b5563" : "#111827";
+  content.style.background = muted ? "rgba(156,163,175,0.65)" : BOARDING_POINT_COLOR;
+  content.style.border = muted ? "1px solid rgba(107,114,128,0.5)" : "2px solid white";
+  content.style.boxShadow = "0 1px 4px rgba(0,0,0,0.3)";
+  content.style.cursor = onClick ? "pointer" : "default";
+  content.textContent = label ?? "";
+  if (title) content.title = title;
+  if (onClick) content.addEventListener("click", onClick);
+
+  return new kakao.maps.CustomOverlay({
+    map,
+    position: new kakao.maps.LatLng(position.lat, position.lng),
+    content,
+    yAnchor: 0.5,
+  });
+}

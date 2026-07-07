@@ -15,8 +15,8 @@ import {
 } from "@/lib/constants";
 import { ArrowLeft, Bus, Calendar, Clock, MapPin, Users } from "lucide-react";
 import { Link, useLocation } from "wouter";
-import { MapView } from "@/components/Map";
-import { useState, useCallback } from "react";
+import { MapView, createBoardingPointMarker } from "@/components/Map";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 interface Props {
   id: number;
@@ -26,30 +26,100 @@ export default function EventDetailPage({ id }: Props) {
   const [, navigate] = useLocation();
   const { data: event, isLoading: eventLoading } = trpc.events.byId.useQuery({ id });
   const { data: trips, isLoading: tripsLoading } = trpc.trips.byEventId.useQuery({ eventId: id });
-  const [mapReady, setMapReady] = useState(false);
+  const { data: allBoardingPoints } = trpc.boardingPoints.byEventId.useQuery({ eventId: id });
+
   const [selectedTripId, setSelectedTripId] = useState<number | null>(null);
+  const [map, setMap] = useState<any>(null);
+  const [highlightedTripId, setHighlightedTripId] = useState<number | null>(null);
+  const markersRef = useRef<any[]>([]);
+  const tripCardRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   const selectedTrip = trips?.find((t) => t.id === selectedTripId) ?? trips?.[0];
 
-  const { data: boardingPoints } = trpc.boardingPoints.byTripId.useQuery(
-    { tripId: selectedTrip?.id ?? 0 },
-    { enabled: !!selectedTrip }
+  const selectedTripPoints = useMemo(
+    () => (allBoardingPoints ?? []).filter((bp) => bp.tripId === selectedTrip?.id),
+    [allBoardingPoints, selectedTrip?.id]
   );
 
-  const handleMapReady = useCallback((map: any) => {
-    setMapReady(true);
-    if (boardingPoints && boardingPoints.length > 0 && window.kakao) {
-      boardingPoints.forEach((bp) => {
-        if (bp.lat && bp.lng) {
-          new window.kakao.maps.Marker({
-            position: new window.kakao.maps.LatLng(Number(bp.lat), Number(bp.lng)),
-            map,
-            title: bp.name,
-          });
-        }
+  const handleMapReady = useCallback((m: any) => {
+    setMap(m);
+  }, []);
+
+  // Selecting a trip via its map marker also brings the matching shuttle
+  // card into view with a brief highlight, so the click has a visible result
+  // even when the card is scrolled out of the viewport.
+  const selectTripFromMarker = useCallback((tripId: number) => {
+    setSelectedTripId(tripId);
+    tripCardRefs.current[tripId]?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightedTripId(tripId);
+  }, []);
+
+  useEffect(() => {
+    if (highlightedTripId === null) return;
+    const timer = setTimeout(() => setHighlightedTripId(null), 1600);
+    return () => clearTimeout(timer);
+  }, [highlightedTripId]);
+
+  // Event-wide rally-point layer: the venue plus every trip's boarding
+  // points, re-rendered whenever the map instance, the point list, or the
+  // selected trip changes (not just once at map init). Phase 2's demand
+  // layer (rider origin points) is expected to follow this same shape - its
+  // own effect + marker-ref array drawn on the same `map` instance.
+  useEffect(() => {
+    if (!map || !window.kakao || !event) return;
+
+    markersRef.current.forEach((marker) => marker.setMap(null));
+    markersRef.current = [];
+
+    const bounds = new window.kakao.maps.LatLngBounds();
+    let hasBounds = false;
+
+    if (event.lat && event.lng) {
+      const venuePosition = new window.kakao.maps.LatLng(Number(event.lat), Number(event.lng));
+      const venueMarker = new window.kakao.maps.Marker({
+        position: venuePosition,
+        map,
+        title: `${event.venue} (도착지)`,
       });
+      markersRef.current.push(venueMarker);
+      bounds.extend(venuePosition);
+      hasBounds = true;
     }
-  }, [boardingPoints]);
+
+    (allBoardingPoints ?? []).forEach((bp) => {
+      if (!bp.lat || !bp.lng) return;
+      const isSelected = bp.tripId === selectedTrip?.id;
+      const orderIndex = isSelected
+        ? selectedTripPoints.findIndex((point) => point.id === bp.id) + 1
+        : undefined;
+
+      const marker = createBoardingPointMarker(
+        map,
+        { lat: Number(bp.lat), lng: Number(bp.lng) },
+        {
+          label: orderIndex ? String(orderIndex) : undefined,
+          muted: !isSelected,
+          title: bp.name,
+          onClick: () => selectTripFromMarker(bp.tripId),
+        }
+      );
+      markersRef.current.push(marker);
+      bounds.extend(new window.kakao.maps.LatLng(Number(bp.lat), Number(bp.lng)));
+      hasBounds = true;
+    });
+
+    if (hasBounds) {
+      map.setBounds(bounds);
+    }
+  }, [map, allBoardingPoints, selectedTrip?.id, selectedTripPoints, event, selectTripFromMarker]);
+
+  // Belt-and-suspenders cleanup on unmount (the effect above already clears
+  // its own markers at the start of every re-run).
+  useEffect(() => {
+    return () => {
+      markersRef.current.forEach((marker) => marker.setMap(null));
+    };
+  }, []);
 
   if (eventLoading) {
     return (
@@ -70,6 +140,8 @@ export default function EventDetailPage({ id }: Props) {
       </div>
     );
   }
+
+  const hasBoardingPoints = (allBoardingPoints?.length ?? 0) > 0;
 
   return (
     <div className="py-8">
@@ -144,7 +216,7 @@ export default function EventDetailPage({ id }: Props) {
         </div>
 
         {event.autoMatchEnabled && !event.matchingFrozenAt && (
-          <div className="rounded-xl border border-primary/30 bg-primary/5 p-5 mb-8 flex items-center justify-between gap-4 flex-wrap">
+          <div className="rounded-xl border border-primary/30 bg-primary/5 p-5 mb-6 flex items-center justify-between gap-4 flex-wrap">
             <div>
               <p className="font-semibold">출발지·시간에 맞춰 자동으로 배차됩니다</p>
               <p className="text-sm text-muted-foreground mt-0.5">
@@ -158,8 +230,75 @@ export default function EventDetailPage({ id }: Props) {
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+          {/* Map + Boarding Points - map-first: leads on mobile, sticky+wider on desktop */}
+          <div className="lg:col-span-3 space-y-4 lg:sticky lg:top-20 lg:self-start">
+            <h2 className="text-lg font-semibold">탑승 포인트</h2>
+
+            <div className="relative rounded-xl overflow-hidden border border-border h-[40vh] lg:h-auto lg:min-h-[400px]">
+              <MapView
+                className="h-full"
+                onMapReady={handleMapReady}
+                initialCenter={
+                  event.lat && event.lng
+                    ? { lat: Number(event.lat), lng: Number(event.lng) }
+                    : { lat: 37.5155, lng: 127.0726 }
+                }
+                initialZoom={12}
+              />
+              {!hasBoardingPoints && (
+                <div className="absolute inset-0 flex items-end sm:items-center justify-center bg-gradient-to-t from-black/50 via-black/10 to-transparent p-4 pointer-events-none">
+                  <div className="pointer-events-auto bg-white rounded-xl border border-border shadow-lg p-4 max-w-sm w-full text-center space-y-2">
+                    <p className="text-sm font-medium">아직 랠리 포인트가 없어요</p>
+                    <p className="text-xs text-muted-foreground">
+                      {event.autoMatchEnabled
+                        ? "참가 신청하면 출발지 수요에 따라 정류장이 만들어집니다."
+                        : "셔틀을 만들면 탑승 포인트를 등록할 수 있어요."}
+                    </p>
+                    <Button size="sm" className="w-full" asChild>
+                      {event.autoMatchEnabled ? (
+                        <Link href={`/events/${event.id}/join`}>참가 신청하기</Link>
+                      ) : (
+                        <Link href="/create">셔틀 만들기</Link>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {selectedTripPoints.length > 0 ? (
+              <div className="space-y-2">
+                {selectedTripPoints.map((bp, idx) => (
+                  <div
+                    key={bp.id}
+                    className="flex items-start gap-3 p-3 rounded-xl border border-border bg-card"
+                  >
+                    <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-white text-xs font-bold flex-shrink-0 mt-0.5">
+                      {idx + 1}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{bp.name}</p>
+                      {bp.address && (
+                        <p className="text-xs text-muted-foreground truncate">{bp.address}</p>
+                      )}
+                      {bp.pickupTime && (
+                        <p className="text-xs text-primary mt-0.5">
+                          픽업 {formatTime(bp.pickupTime)}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : hasBoardingPoints ? (
+              <p className="text-sm text-muted-foreground text-center py-4">
+                셔틀을 선택하면 탑승 포인트가 표시됩니다
+              </p>
+            ) : null}
+          </div>
+
           {/* Trips */}
-          <div className="lg:col-span-3 space-y-4">
+          <div className="lg:col-span-2 space-y-4">
             <h2 className="text-lg font-semibold">셔틀 목록</h2>
             {tripsLoading ? (
               <div className="space-y-3">
@@ -172,16 +311,18 @@ export default function EventDetailPage({ id }: Props) {
                   const isConfirmed = trip.status === "confirmed";
                   const isFull = trip.availability.remaining <= 0;
                   const isSelected = selectedTrip?.id === trip.id;
+                  const isHighlighted = highlightedTripId === trip.id;
 
                   return (
                     <div
                       key={trip.id}
+                      ref={(el) => { tripCardRefs.current[trip.id] = el; }}
                       onClick={() => setSelectedTripId(trip.id)}
                       className={`rounded-xl border p-4 cursor-pointer transition-all duration-200 ${
                         isSelected
                           ? "border-primary bg-primary/5 shadow-sm"
                           : "border-border bg-card hover:border-primary/40 hover:shadow-sm"
-                      }`}
+                      } ${isHighlighted ? "ring-2 ring-primary ring-offset-2" : ""}`}
                     >
                       <div className="flex items-start justify-between gap-3 mb-3">
                         <div className="flex items-center gap-2 flex-wrap">
@@ -255,55 +396,6 @@ export default function EventDetailPage({ id }: Props) {
                   <Link href="/create">셔틀 만들기</Link>
                 </Button>
               </div>
-            )}
-          </div>
-
-          {/* Map + Boarding Points */}
-          <div className="lg:col-span-2 space-y-4">
-            <h2 className="text-lg font-semibold">탑승 포인트</h2>
-
-            {/* Map */}
-            <div className="rounded-xl overflow-hidden border border-border h-48">
-              <MapView
-                onMapReady={handleMapReady}
-                initialCenter={
-                  event.lat && event.lng
-                    ? { lat: Number(event.lat), lng: Number(event.lng) }
-                    : { lat: 37.5155, lng: 127.0726 }
-                }
-                initialZoom={12}
-              />
-            </div>
-
-            {/* Boarding Points List */}
-            {boardingPoints && boardingPoints.length > 0 ? (
-              <div className="space-y-2">
-                {boardingPoints.map((bp, idx) => (
-                  <div
-                    key={bp.id}
-                    className="flex items-start gap-3 p-3 rounded-xl border border-border bg-card"
-                  >
-                    <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-white text-xs font-bold flex-shrink-0 mt-0.5">
-                      {idx + 1}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">{bp.name}</p>
-                      {bp.address && (
-                        <p className="text-xs text-muted-foreground truncate">{bp.address}</p>
-                      )}
-                      {bp.pickupTime && (
-                        <p className="text-xs text-primary mt-0.5">
-                          픽업 {formatTime(bp.pickupTime)}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground text-center py-4">
-                셔틀을 선택하면 탑승 포인트가 표시됩니다
-              </p>
             )}
           </div>
         </div>
