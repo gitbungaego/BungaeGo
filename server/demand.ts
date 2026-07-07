@@ -1,4 +1,5 @@
 import type { RideRequestOrigin } from "./db";
+import { haversineMeters, type LatLng } from "./matching/haversine";
 
 // Grid cell precision: rounding lat/lng to 2 decimal places snaps every origin
 // onto a ~1.1km grid before aggregation, so the response can never carry more
@@ -8,6 +9,11 @@ const GRID_DECIMAL_PLACES = 2;
 export interface DemandGridCell {
   lat: number;
   lng: number;
+  count: number;
+  seats: number;
+}
+
+export interface NearbyDemandSummary {
   count: number;
   seats: number;
 }
@@ -39,4 +45,25 @@ export function buildDemandGrid(origins: RideRequestOrigin[]): DemandGridCell[] 
   }
 
   return Array.from(grid.values());
+}
+
+export function summarizeNearbyDemand(
+  origins: RideRequestOrigin[],
+  center: LatLng,
+  radiusMeters: number
+): NearbyDemandSummary {
+  return origins.reduce<NearbyDemandSummary>(
+    (summary, origin) => {
+      const distance = haversineMeters(center, {
+        lat: Number(origin.originLat),
+        lng: Number(origin.originLng),
+      });
+      if (distance > radiusMeters) return summary;
+      return {
+        count: summary.count + 1,
+        seats: summary.seats + origin.seats,
+      };
+    },
+    { count: 0, seats: 0 }
+  );
 }

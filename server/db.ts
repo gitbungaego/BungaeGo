@@ -482,6 +482,13 @@ export async function getBoardingPointsByTripId(tripId: number): Promise<Boardin
     .orderBy(boardingPoints.order);
 }
 
+export async function getBoardingPointById(id: number): Promise<BoardingPoint | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(boardingPoints).where(eq(boardingPoints.id, id)).limit(1);
+  return result[0];
+}
+
 // All boarding points across every trip of an event, for the event-wide
 // rally-point map (EventDetail's map shows every shuttle's stops at once,
 // not just the selected one).

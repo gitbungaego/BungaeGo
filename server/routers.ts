@@ -35,6 +35,7 @@ import {
   getAllStopCandidates,
   getAllTrips,
   getAllUsers,
+  getBoardingPointById,
   getBoardingPointsByEventId,
   getBoardingPointsByTripId,
   getBusAccessibleRallyPointCandidates,
@@ -72,7 +73,7 @@ import {
   updateUserStatus,
 } from "./db";
 import { buildFareItems, cancelReservationsForTrip, computeRefundableAmount } from "./payments";
-import { buildDemandGrid } from "./demand";
+import { buildDemandGrid, summarizeNearbyDemand } from "./demand";
 import { CONSENT_VERSIONS, recordConsent } from "./consents";
 import { isThemeAllowed } from "./featureFlags";
 import { getPolicy } from "./matching/confirmPolicy";
@@ -157,6 +158,7 @@ async function withAvailability(trip: Trip) {
 // riders already have a real trip, so they're no longer open demand a new
 // rider would be joining.
 const DEMAND_STATUSES: RideRequest["status"][] = ["pending", "clustered"];
+const NEARBY_DEMAND_RADIUS_METERS = 1500;
 
 // Combined cluster-snap candidate pool for the matching pipeline: admin-vetted
 // stopCandidates plus community-sourced rallyPointCandidates marked
@@ -379,6 +381,61 @@ export const appRouter = router({
     byEventId: publicProcedure
       .input(z.object({ eventId: z.number() }))
       .query(({ input }) => getBoardingPointsByEventId(input.eventId)),
+
+    detailById: publicProcedure
+      .input(z.object({ boardingPointId: z.number() }))
+      .query(async ({ input }) => {
+        const point = await getBoardingPointById(input.boardingPointId);
+        if (!point) throw new TRPCError({ code: "NOT_FOUND" });
+
+        const owningTrip = await getTripById(point.tripId);
+        if (!owningTrip) throw new TRPCError({ code: "NOT_FOUND" });
+
+        const center =
+          point.lat && point.lng
+            ? { lat: Number(point.lat), lng: Number(point.lng) }
+            : null;
+
+        const [eventPoints, origins] = await Promise.all([
+          getBoardingPointsByEventId(owningTrip.eventId),
+          center ? getRideRequestOriginsByEventId(owningTrip.eventId, DEMAND_STATUSES) : Promise.resolve([]),
+        ]);
+
+        const sameLocationPoints = eventPoints.filter((candidate) => {
+          if (candidate.id === point.id) return true;
+          if (!center || !candidate.lat || !candidate.lng) return false;
+          return Number(candidate.lat) === center.lat && Number(candidate.lng) === center.lng;
+        });
+
+        const tripRows = await Promise.all(
+          sameLocationPoints.map(async (boardingPoint) => {
+            const trip = await getTripById(boardingPoint.tripId);
+            if (!trip || !isThemeAllowed(trip.theme)) return null;
+            const tripWithAvailability = await withAvailability(trip);
+            return {
+              id: trip.id,
+              status: trip.status,
+              price: trip.price,
+              departureAt: trip.departureAt,
+              pickupTime: boardingPoint.pickupTime,
+              currentCount: trip.currentCount,
+              minCount: trip.minCount,
+              maxCount: trip.maxCount,
+              availability: {
+                remaining: tripWithAvailability.availability.remaining,
+              },
+            };
+          })
+        );
+
+        return {
+          point,
+          nearbyDemand: center
+            ? summarizeNearbyDemand(origins, center, NEARBY_DEMAND_RADIUS_METERS)
+            : { count: 0, seats: 0 },
+          trips: tripRows.filter((trip): trip is NonNullable<typeof trip> => trip !== null),
+        };
+      }),
 
     create: protectedProcedure
       .input(
