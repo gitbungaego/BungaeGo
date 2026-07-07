@@ -52,6 +52,7 @@ import {
   getReservationsByUserId,
   getReservationsWithPaymentsByTripId,
   getRideRequestById,
+  getRideRequestOriginsByEventId,
   getRideRequestsByEventId,
   getRideRequestsByUserId,
   getTripById,
@@ -71,6 +72,7 @@ import {
   updateUserStatus,
 } from "./db";
 import { buildFareItems, cancelReservationsForTrip, computeRefundableAmount } from "./payments";
+import { buildDemandGrid } from "./demand";
 import { CONSENT_VERSIONS, recordConsent } from "./consents";
 import { isThemeAllowed } from "./featureFlags";
 import { getPolicy } from "./matching/confirmPolicy";
@@ -78,7 +80,7 @@ import { notifyTrip } from "./notify/tripMessenger";
 import { runMatchingPipeline, type PipelineParams } from "./matching/pipeline";
 import { evaluateCancellation, isCreatedAfterOwnD5 } from "@shared/cancellationPolicy";
 import { USER_STATUSES } from "../drizzle/schema";
-import type { Trip } from "../drizzle/schema";
+import type { RideRequest, Trip } from "../drizzle/schema";
 
 // ─── Admin guard ─────────────────────────────────────────────────────────────
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -149,6 +151,12 @@ async function withAvailability(trip: Trip) {
   const tripReservations = await getReservationsWithPaymentsByTripId(trip.id);
   return { ...trip, availability: policy.availability(trip, tripReservations) };
 }
+
+// Ride requests still counted as live demand for the map: anything that
+// hasn't failed/been refunded. Excludes "route_confirmed"/"boarded" -those
+// riders already have a real trip, so they're no longer open demand a new
+// rider would be joining.
+const DEMAND_STATUSES: RideRequest["status"][] = ["pending", "clustered"];
 
 // Combined cluster-snap candidate pool for the matching pipeline: admin-vetted
 // stopCandidates plus community-sourced rallyPointCandidates marked
@@ -655,6 +663,18 @@ export const appRouter = router({
 
   // ─── Ride Requests (pre-matching signup, auto-match events) ──────────────────
   rideRequests: router({
+    // Anonymized demand map: aggregated grid cells only (see server/demand.ts) -
+    // never a userId, name, phone, address, or exact coordinate. Public because
+    // it carries nothing sensitive; empty for events without auto-matching.
+    demandByEvent: publicProcedure
+      .input(z.object({ eventId: z.number() }))
+      .query(async ({ input }) => {
+        const event = await getEventById(input.eventId);
+        if (!event || !event.autoMatchEnabled) return [];
+        const origins = await getRideRequestOriginsByEventId(input.eventId, DEMAND_STATUSES);
+        return buildDemandGrid(origins);
+      }),
+
     myList: protectedProcedure.query(({ ctx }) => getRideRequestsByUserId(ctx.user.id)),
 
     byId: protectedProcedure

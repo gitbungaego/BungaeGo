@@ -940,6 +940,31 @@ export async function getPendingRideRequestsByEventId(eventId: number): Promise<
     .where(and(eq(rideRequests.eventId, eventId), eq(rideRequests.status, "pending")));
 }
 
+// Minimal projection for the anonymized demand map: only origin coordinates
+// and seat count ever leave the DB layer here — no id, name, phone, or
+// address, so there's nothing sensitive for a caller to accidentally forward.
+export interface RideRequestOrigin {
+  originLat: string;
+  originLng: string;
+  seats: number;
+}
+
+export async function getRideRequestOriginsByEventId(
+  eventId: number,
+  statuses: RideRequest["status"][]
+): Promise<RideRequestOrigin[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      originLat: rideRequests.originLat,
+      originLng: rideRequests.originLng,
+      seats: rideRequests.seats,
+    })
+    .from(rideRequests)
+    .where(and(eq(rideRequests.eventId, eventId), inArray(rideRequests.status, statuses)));
+}
+
 export async function getRideRequestById(id: number): Promise<RideRequest | undefined> {
   const db = await getDb();
   if (!db) return undefined;
