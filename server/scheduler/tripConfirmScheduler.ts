@@ -80,5 +80,6 @@ export function startTripConfirmScheduler(): NodeJS.Timeout {
     );
   }, SCHEDULER_INTERVAL_MS);
   timer.unref?.();
+  console.log(`[scheduler] trip confirm scheduler started (interval: ${SCHEDULER_INTERVAL_MS / 60000}m)`);
   return timer;
 }
