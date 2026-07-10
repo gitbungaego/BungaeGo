@@ -110,6 +110,59 @@ export async function refundTossPaymentIfNeeded(
   });
 }
 
+// ─── Auto-match difference refund (track B) ──────────────────────────────────
+/**
+ * 상한가 선결제 신청이 최종가로 확정될 때 차액을 환불한다.
+ * 차액 = (상한가 - 최종가) × seats. refundedAmount(누적 환불액) 기준으로
+ * 부족분(delta)만 추가 환불하므로, 매칭 재계산으로 커밋이 다시 돌아도
+ * 같은 목표액에 대해 이중 환불되지 않는다.
+ *
+ * 현금(토스 부분취소)으로 환불 가능한 만큼 먼저 취소하고, 포인트를 많이 써서
+ * 현금 잔액이 차액보다 작은 경우 나머지는 포인트로 환불한다.
+ */
+export async function applyRideRequestDifferenceRefund(
+  payment: Payment,
+  opts: {
+    userId: number;
+    requestId: number;
+    seats: number;
+    capPricePerSeat: number;
+    finalPricePerSeat: number;
+  }
+): Promise<void> {
+  const targetRefund = Math.max(0, (opts.capPricePerSeat - opts.finalPricePerSeat) * opts.seats);
+  if (targetRefund === 0) return; // 차액 0이면 스킵
+  if (payment.method !== "toss" || payment.status !== "paid") return;
+
+  const delta = targetRefund - payment.refundedAmount;
+  if (delta <= 0) return; // 이미 목표액까지 환불됨 (재계산 멱등)
+
+  const cashAvailable = payment.totalAmount - payment.refundedAmount;
+  const cashRefund = Math.min(delta, Math.max(0, cashAvailable));
+
+  if (cashRefund > 0) {
+    if (!payment.tossPaymentKey) {
+      throw new Error(`toss payment ${payment.id} has no paymentKey - cannot refund difference`);
+    }
+    await cancelTossPayment({
+      paymentKey: payment.tossPaymentKey,
+      cancelReason: "배차 확정 차액 환불",
+      cancelAmount: cashRefund,
+      idempotencyKey: `diff-${payment.id}-${targetRefund}`,
+    });
+  }
+
+  const pointsRemainder = delta - cashRefund;
+  if (pointsRemainder > 0) {
+    await addPoints(opts.userId, pointsRemainder, "refund", "배차 확정 차액 포인트 환불", String(opts.requestId));
+  }
+
+  await updatePaymentStatus(payment.id, "paid", {
+    refundedAmount: payment.refundedAmount + delta,
+    cancelNote: `차액 환불 누적 ${payment.refundedAmount + delta}원 (확정가 ${opts.finalPricePerSeat}원/석)`,
+  });
+}
+
 // ─── Trip cancellation cascade ────────────────────────────────────────────────
 // D-5 minCount 미달 자동취소 등에서 호출. 예약별 개별 try-catch: 한 건의
 // Toss 취소 실패가 나머지 예약 환불을 막지 않고, 실패 건은 결제를 paid로

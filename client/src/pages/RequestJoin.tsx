@@ -13,6 +13,8 @@ import { MapView, searchKeyword, type KakaoPlaceResult } from "@/components/Map"
 import { formatPrice, formatDateTime } from "@/lib/constants";
 import { ArrowLeft, ArrowRight, CheckCircle2, MapPin, Minus, Plus, Search } from "lucide-react";
 import { Link } from "wouter";
+import { isTossConfigured } from "@/lib/toss";
+import { useTossPayment } from "@/hooks/useTossPayment";
 
 interface Props {
   eventId: number;
@@ -67,6 +69,25 @@ export default function RequestJoinPage({ eventId }: Props) {
 
   const { data: event, isLoading: eventLoading } = trpc.events.byId.useQuery({ id: eventId });
   const { data: pointsBalance } = trpc.points.myBalance.useQuery(undefined, { enabled: isAuthenticated });
+  const { data: tossServer } = trpc.payments.tossEnabled.useQuery(undefined, { enabled: isTossConfigured() });
+  const tossAvailable = isTossConfigured() && !!tossServer?.enabled;
+
+  const [payMethod, setPayMethod] = useState<"toss" | "mock">("mock");
+  useEffect(() => {
+    if (tossAvailable) setPayMethod("toss");
+  }, [tossAvailable]);
+
+  const [tossSubmitting, setTossSubmitting] = useState(false);
+  // 표시 금액 = 상한가 × 좌석 - 포인트. 실제 승인 금액은 서버가 주문 생성
+  // 시점에 같은 식으로 계산해 대조한다.
+  const toss = useTossPayment({
+    enabled: step === 4 && payMethod === "toss" && tossAvailable,
+    amount: (event?.autoMatchPricePerSeat ?? 0) * seats - pointsUsed,
+  });
+
+  const createTossOrder = trpc.payments.createTossOrder.useMutation({
+    onError: (err) => toast.error(err.message || "주문 생성에 실패했습니다."),
+  });
 
   const createRequest = trpc.rideRequests.create.useMutation({
     onSuccess: (data) => {
@@ -164,7 +185,7 @@ export default function RequestJoinPage({ eventId }: Props) {
     return Number.isNaN(dt.getTime()) ? null : dt.getTime();
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (originLat === null || originLng === null) {
       toast.error("출발지를 검색해주세요.");
       return;
@@ -178,7 +199,8 @@ export default function RequestJoinPage({ eventId }: Props) {
       toast.error("참가자 정보를 입력해주세요.");
       return;
     }
-    createRequest.mutate({
+
+    const orderInput = {
       eventId,
       originAddress,
       originLat: String(originLat),
@@ -190,8 +212,28 @@ export default function RequestJoinPage({ eventId }: Props) {
       passengerEmail: passengerEmail || undefined,
       pointsUsed,
       referralCode: referralCode || undefined,
-      paymentMethod: "mock_card",
-    });
+    };
+
+    if (payMethod === "toss") {
+      setTossSubmitting(true);
+      try {
+        const order = await createTossOrder.mutateAsync({ kind: "rideRequest", ...orderInput });
+        await toss.requestPayment({
+          orderId: order.orderId,
+          orderName: order.orderName,
+          amount: order.amount,
+          customerName: passengerName,
+          customerEmail: passengerEmail || undefined,
+        });
+      } catch (err) {
+        if (err instanceof Error && err.message) toast.error(err.message);
+      } finally {
+        setTossSubmitting(false);
+      }
+      return;
+    }
+
+    createRequest.mutate({ ...orderInput, paymentMethod: "mock_card" });
   };
 
   const canProceed = () => {
@@ -434,9 +476,50 @@ export default function RequestJoinPage({ eventId }: Props) {
                 </div>
               </div>
 
-              <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-700">
-                ※ 데모 환경입니다. 실제 결제는 이루어지지 않습니다. 신청 후 배차가 확정되면 정류장과 출발 시각이 배정됩니다.
+              {/* 상한가 안내: 지금 결제하는 금액은 상한이고, 확정가와의
+                  차액은 배차 확정 시 자동 환불된다. */}
+              <div className="rounded-lg bg-primary/5 border border-primary/30 p-3 text-xs text-foreground/80">
+                지금 결제하는 금액은 <span className="font-semibold">상한가</span>입니다. 최종 금액은 배차 확정 시 이
+                금액 <span className="font-semibold">이하</span>로 결정되며, 차액은 자동으로 환불됩니다.
               </div>
+
+              {tossAvailable && (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">결제 수단</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPayMethod("toss")}
+                      className={`rounded-lg border p-3 text-sm font-medium transition-all ${
+                        payMethod === "toss" ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
+                      }`}
+                    >
+                      토스페이먼츠
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPayMethod("mock")}
+                      className={`rounded-lg border p-3 text-sm font-medium transition-all ${
+                        payMethod === "mock" ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
+                      }`}
+                    >
+                      데모 결제
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {payMethod === "toss" && tossAvailable ? (
+                <div className="space-y-2">
+                  <div id="toss-payment-methods" />
+                  <div id="toss-agreement" />
+                  {toss.error && <p className="text-xs text-destructive">{toss.error}</p>}
+                </div>
+              ) : (
+                <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-700">
+                  ※ 데모 환경입니다. 실제 결제는 이루어지지 않습니다. 신청 후 배차가 확정되면 정류장과 출발 시각이 배정됩니다.
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -454,8 +537,20 @@ export default function RequestJoinPage({ eventId }: Props) {
               <ArrowRight className="h-4 w-4 ml-1.5" />
             </Button>
           ) : (
-            <Button onClick={handleSubmit} disabled={createRequest.isPending} className="flex-1 bg-primary">
-              {createRequest.isPending ? "처리 중..." : `${formatPrice(totalAmount)} 결제하고 신청하기`}
+            <Button
+              onClick={handleSubmit}
+              disabled={
+                createRequest.isPending ||
+                tossSubmitting ||
+                (payMethod === "toss" && !toss.ready)
+              }
+              className="flex-1 bg-primary"
+            >
+              {createRequest.isPending || tossSubmitting
+                ? "처리 중..."
+                : payMethod === "toss" && !toss.ready
+                ? "결제수단 불러오는 중..."
+                : `${formatPrice(totalAmount)} 결제하고 신청하기`}
             </Button>
           )}
         </div>

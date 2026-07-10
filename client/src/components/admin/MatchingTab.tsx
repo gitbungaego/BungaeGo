@@ -88,6 +88,8 @@ export function MatchingTab() {
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
   const [params, setParams] = useState<PipelineParamsInput>(DEFAULT_PARAMS);
   const [preview, setPreview] = useState<PreviewOutput | null>(null);
+  // 트립 최종 1인 가격(실제 대절가 기준). 비우면 상한가 그대로 확정.
+  const [finalPriceInput, setFinalPriceInput] = useState("");
 
   useEffect(() => {
     if (!selectedEventId && autoMatchEvents.length > 0) {
@@ -193,9 +195,27 @@ export function MatchingTab() {
               {previewMutation.isPending ? "계산 중..." : "재계산"}
             </Button>
 
+            <div className="flex items-center gap-1.5">
+              <Input
+                type="number"
+                value={finalPriceInput}
+                onChange={(e) => setFinalPriceInput(e.target.value)}
+                placeholder={`최종가/석 (상한 ${selectedEvent?.autoMatchPricePerSeat?.toLocaleString() ?? "-"}원)`}
+                className="h-9 w-56 text-sm"
+                min={1}
+                max={selectedEvent?.autoMatchPricePerSeat ?? undefined}
+              />
+            </div>
+
             <Button
               disabled={!preview || commitMutation.isPending || !!selectedEvent?.matchingFrozenAt}
-              onClick={() => commitMutation.mutate({ eventId: selectedEventId, params })}
+              onClick={() =>
+                commitMutation.mutate({
+                  eventId: selectedEventId,
+                  params,
+                  finalPricePerSeat: finalPriceInput ? Number(finalPriceInput) : undefined,
+                })
+              }
             >
               {commitMutation.isPending ? "확정 중..." : "확정 (배차 커밋)"}
             </Button>

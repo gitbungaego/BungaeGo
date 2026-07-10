@@ -131,7 +131,7 @@ export default function BookingPage({ tripId }: Props) {
     if (payMethod === "toss") {
       setTossSubmitting(true);
       try {
-        const order = await createTossOrder.mutateAsync(orderInput);
+        const order = await createTossOrder.mutateAsync({ kind: "reservation", ...orderInput });
         // 결제창으로 리다이렉트 - 이후 플로우는 successUrl/failUrl 페이지가 이어받는다.
         await toss.requestPayment({
           orderId: order.orderId,

@@ -674,6 +674,18 @@ export async function getPaymentByOrderId(orderId: string): Promise<Payment | un
   return result[0];
 }
 
+export async function getLatestPaymentByRideRequestId(rideRequestId: number): Promise<Payment | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db
+    .select()
+    .from(payments)
+    .where(eq(payments.rideRequestId, rideRequestId))
+    .orderBy(desc(payments.id))
+    .limit(1);
+  return result[0];
+}
+
 export async function getLatestPaymentByReservationId(reservationId: number): Promise<Payment | undefined> {
   const db = await getDb();
   if (!db) return undefined;
@@ -747,14 +759,23 @@ export async function deletePaymentsByReservationIds(reservationIds: number[]): 
   const db = await getDb();
   if (!db) return;
   const paymentRows = await db
-    .select({ id: payments.id })
+    .select({ id: payments.id, method: payments.method })
     .from(payments)
     .where(inArray(payments.reservationId, reservationIds));
-  const paymentIds = paymentRows.map((p) => p.id);
-  if (paymentIds.length > 0) {
-    await db.delete(paymentItems).where(inArray(paymentItems.paymentId, paymentIds));
+
+  // 실결제(toss) 기록은 매칭 재계산으로 예약이 지워져도 삭제하면 안 된다
+  // (돈이 오간 원장) - 예약 연결만 끊고 rideRequestId로 다음 커밋에서
+  // 다시 연결된다. mock 결제는 기존대로 예약과 함께 삭제.
+  const tossIds = paymentRows.filter((p) => p.method === "toss").map((p) => p.id);
+  const deletableIds = paymentRows.filter((p) => p.method !== "toss").map((p) => p.id);
+
+  if (tossIds.length > 0) {
+    await db.update(payments).set({ reservationId: null }).where(inArray(payments.id, tossIds));
   }
-  await db.delete(payments).where(inArray(payments.reservationId, reservationIds));
+  if (deletableIds.length > 0) {
+    await db.delete(paymentItems).where(inArray(paymentItems.paymentId, deletableIds));
+    await db.delete(payments).where(inArray(payments.id, deletableIds));
+  }
 }
 
 // ─── Points ───────────────────────────────────────────────────────────────────

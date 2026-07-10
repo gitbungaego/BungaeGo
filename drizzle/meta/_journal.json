@@ -78,6 +78,13 @@
       "when": 1783687971111,
       "tag": "0010_parallel_the_phantom",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1783689858527,
+      "tag": "0011_solid_molten_man",
+      "breakpoints": true
     }
   ]
 }

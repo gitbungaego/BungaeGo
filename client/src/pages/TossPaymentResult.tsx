@@ -22,7 +22,11 @@ export function TossPaymentSuccessPage() {
 
   const confirm = trpc.payments.confirmToss.useMutation({
     onSuccess: (result) => {
-      navigate(`/reservations/${result.reservationId}/confirm`, { replace: true });
+      if (result.kind === "rideRequest") {
+        navigate(`/requests/${result.requestId}/confirm`, { replace: true });
+      } else {
+        navigate(`/reservations/${result.reservationId}/confirm`, { replace: true });
+      }
     },
     onError: (err) => setErrorMessage(err.message || "결제 승인에 실패했습니다."),
   });

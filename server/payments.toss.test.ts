@@ -171,6 +171,7 @@ describe("payments.createTossOrder", () => {
 
     const caller = appRouter.createCaller(makeUserCtx(42));
     const result = await caller.payments.createTossOrder({
+      kind: "reservation",
       tripId: 1,
       seats: 2,
       passengerName: "Test",

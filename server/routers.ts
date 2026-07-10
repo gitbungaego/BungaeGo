@@ -42,6 +42,7 @@ import {
   getEventById,
   getEvents,
   getLatestPaymentByReservationId,
+  getLatestPaymentByRideRequestId,
   getPaidPaymentItemTotalsByType,
   getPaymentByOrderId,
   getPaymentItemsByPaymentId,
@@ -73,8 +74,14 @@ import {
   updateTripStatus,
   updateUserStatus,
 } from "./db";
-import { buildFareItems, cancelReservationsForTrip, computeRefundableAmount, refundTossPaymentIfNeeded } from "./payments";
-import { finalizeReservation, maybeConfirmTrip, validatePointsUsage, type TossOrderContext } from "./reservationFlow";
+import {
+  applyRideRequestDifferenceRefund,
+  buildFareItems,
+  cancelReservationsForTrip,
+  computeRefundableAmount,
+  refundTossPaymentIfNeeded,
+} from "./payments";
+import { finalizeReservation, finalizeRideRequest, maybeConfirmTrip, validatePointsUsage, type TossOrderContext } from "./reservationFlow";
 import { cancelTossPayment, confirmTossPayment, isTossEnabled, TossApiError } from "./toss";
 import { nanoid } from "nanoid";
 import { buildDemandGrid, summarizeNearbyDemand } from "./demand";
@@ -654,16 +661,33 @@ export const appRouter = router({
 
     createTossOrder: protectedProcedure
       .input(
-        z.object({
-          tripId: z.number(),
-          boardingPointId: z.number().optional(),
-          seats: z.number().min(1).max(8),
-          passengerName: z.string().min(1),
-          passengerPhone: z.string().min(1),
-          passengerEmail: z.string().email().optional(),
-          pointsUsed: z.number().min(0).default(0),
-          referralCode: z.string().optional(),
-        })
+        z.discriminatedUnion("kind", [
+          z.object({
+            kind: z.literal("reservation"),
+            tripId: z.number(),
+            boardingPointId: z.number().optional(),
+            seats: z.number().min(1).max(8),
+            passengerName: z.string().min(1),
+            passengerPhone: z.string().min(1),
+            passengerEmail: z.string().email().optional(),
+            pointsUsed: z.number().min(0).default(0),
+            referralCode: z.string().optional(),
+          }),
+          z.object({
+            kind: z.literal("rideRequest"),
+            eventId: z.number(),
+            originAddress: z.string().optional(),
+            originLat: z.string(),
+            originLng: z.string(),
+            targetArrivalAt: z.number(),
+            seats: z.number().min(1).max(8),
+            passengerName: z.string().min(1),
+            passengerPhone: z.string().min(1),
+            passengerEmail: z.string().email().optional(),
+            pointsUsed: z.number().min(0).default(0),
+            referralCode: z.string().optional(),
+          }),
+        ])
       )
       .mutation(async ({ input, ctx }) => {
         if (!isTossEnabled()) {
@@ -672,24 +696,50 @@ export const appRouter = router({
         if (ctx.user.status === "suspended") {
           throw new TRPCError({
             code: "FORBIDDEN",
-            message: "정지된 계정은 예약을 생성할 수 없습니다. 고객센터로 문의해주세요.",
+            message: "정지된 계정은 결제를 진행할 수 없습니다. 고객센터로 문의해주세요.",
           });
         }
 
-        const trip = await getTripById(input.tripId);
-        if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
+        let fareAmount: number;
+        let orderName: string;
 
-        validatePointsUsage(input.pointsUsed, ctx.user.pointsBalance, trip.price * input.seats);
+        if (input.kind === "reservation") {
+          const trip = await getTripById(input.tripId);
+          if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
 
-        // Soft availability check so a sold-out trip fails before the user
-        // reaches the payment window; the binding check is the seat lock
-        // inside confirmToss → finalizeReservation.
-        const { availability } = await withAvailability(trip);
-        if (input.seats > availability.remaining) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "좌석이 부족합니다." });
+          validatePointsUsage(input.pointsUsed, ctx.user.pointsBalance, trip.price * input.seats);
+
+          // Soft availability check so a sold-out trip fails before the user
+          // reaches the payment window; the binding check is the seat lock
+          // inside confirmToss → finalizeReservation.
+          const { availability } = await withAvailability(trip);
+          if (input.seats > availability.remaining) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "좌석이 부족합니다." });
+          }
+
+          fareAmount = trip.price * input.seats;
+          const event = await getEventById(trip.eventId);
+          orderName = `${event?.title ?? "셔틀"} ${input.seats}석`.slice(0, 100);
+        } else {
+          // Track B: 상한가(autoMatchPricePerSeat) 기준 선결제. 배차 확정 시
+          // 최종가와의 차액이 부분취소로 환불된다 (admin.matching.commit).
+          const event = await getEventById(input.eventId);
+          if (!event) throw new TRPCError({ code: "NOT_FOUND", message: "이벤트를 찾을 수 없습니다." });
+          if (!event.autoMatchEnabled) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "이 이벤트는 자동 배차를 지원하지 않습니다." });
+          }
+          if (event.matchingFrozenAt) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "이미 배차가 확정된 이벤트입니다." });
+          }
+          if (!event.autoMatchPricePerSeat) {
+            throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "이벤트 가격 설정이 없습니다." });
+          }
+
+          fareAmount = event.autoMatchPricePerSeat * input.seats;
+          validatePointsUsage(input.pointsUsed, ctx.user.pointsBalance, fareAmount);
+          orderName = `${event.title} 참가 신청 ${input.seats}석`.slice(0, 100);
         }
 
-        const fareAmount = trip.price * input.seats;
         const amount = fareAmount - input.pointsUsed;
         if (amount < 100) {
           throw new TRPCError({
@@ -698,22 +748,10 @@ export const appRouter = router({
           });
         }
 
-        const event = await getEventById(trip.eventId);
         // Toss orderId: 6-64 chars of [A-Za-z0-9-_=]; nanoid's default
         // alphabet is a subset of that.
         const orderId = `bungae-${nanoid(21)}`;
-        const context: TossOrderContext = {
-          kind: "reservation",
-          userId: ctx.user.id,
-          tripId: input.tripId,
-          boardingPointId: input.boardingPointId,
-          seats: input.seats,
-          passengerName: input.passengerName,
-          passengerPhone: input.passengerPhone,
-          passengerEmail: input.passengerEmail,
-          pointsUsed: input.pointsUsed,
-          referralCode: input.referralCode,
-        };
+        const context: TossOrderContext = { ...input, userId: ctx.user.id };
         await createPaymentWithItems({
           reservationId: null,
           method: "toss",
@@ -724,11 +762,7 @@ export const appRouter = router({
           items: buildFareItems({ fareAmount, pointsUsed: input.pointsUsed }),
         });
 
-        return {
-          orderId,
-          amount,
-          orderName: `${event?.title ?? "셔틀"} ${input.seats}석`.slice(0, 100),
-        };
+        return { orderId, amount, orderName };
       }),
 
     confirmToss: protectedProcedure
@@ -749,8 +783,13 @@ export const appRouter = router({
         }
 
         // Double-submit of the same success callback: already finalized.
-        if (payment.status === "paid" && payment.reservationId) {
-          return { kind: context.kind, reservationId: payment.reservationId };
+        if (payment.status === "paid") {
+          if (context.kind === "reservation" && payment.reservationId) {
+            return { kind: "reservation" as const, reservationId: payment.reservationId };
+          }
+          if (context.kind === "rideRequest" && payment.rideRequestId) {
+            return { kind: "rideRequest" as const, requestId: payment.rideRequestId };
+          }
         }
         if (payment.status !== "pending") {
           throw new TRPCError({ code: "BAD_REQUEST", message: "이미 처리된 주문입니다." });
@@ -768,18 +807,30 @@ export const appRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: "결제 금액이 주문 금액과 일치하지 않습니다." });
         }
 
-        // 승인 "전" 좌석 소프트 체크: 매진이 확실하면 과금 자체를 막는다.
-        // (최종 확정은 승인 후 좌석 락 안에서 다시 검증된다.)
-        const trip = await getTripById(context.tripId);
-        if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
-        const { availability } = await withAvailability(trip);
-        if (context.seats > availability.remaining) {
-          await updatePaymentStatus(payment.id, "cancelled", {
-            cancelledAt: new Date(),
-            cancelReason: "payment_failed",
-            cancelNote: "승인 전 좌석 매진",
-          });
-          throw new TRPCError({ code: "CONFLICT", message: "좌석이 마감되어 결제를 진행하지 않았습니다." });
+        // 승인 "전" 소프트 체크: 확정이 불가능한 게 확실하면 과금 자체를
+        // 막는다. (구속력 있는 검증은 승인 후 finalize 단계에서 다시 한다.)
+        if (context.kind === "reservation") {
+          const trip = await getTripById(context.tripId);
+          if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
+          const { availability } = await withAvailability(trip);
+          if (context.seats > availability.remaining) {
+            await updatePaymentStatus(payment.id, "cancelled", {
+              cancelledAt: new Date(),
+              cancelReason: "payment_failed",
+              cancelNote: "승인 전 좌석 매진",
+            });
+            throw new TRPCError({ code: "CONFLICT", message: "좌석이 마감되어 결제를 진행하지 않았습니다." });
+          }
+        } else {
+          const event = await getEventById(context.eventId);
+          if (!event || !event.autoMatchEnabled || event.matchingFrozenAt) {
+            await updatePaymentStatus(payment.id, "cancelled", {
+              cancelledAt: new Date(),
+              cancelReason: "payment_failed",
+              cancelNote: "승인 전 신청 불가 상태 (이벤트 마감/동결)",
+            });
+            throw new TRPCError({ code: "CONFLICT", message: "참가 신청이 마감되어 결제를 진행하지 않았습니다." });
+          }
         }
 
         let tossPayment;
@@ -802,24 +853,38 @@ export const appRouter = router({
         }
 
         try {
-          const reservationId = await finalizeReservation(ctx.user, context, async (id) => {
+          if (context.kind === "reservation") {
+            const reservationId = await finalizeReservation(ctx.user, context, async (id) => {
+              await updatePaymentStatus(payment.id, "paid", {
+                paidAt: new Date(),
+                tossPaymentKey: tossPayment.paymentKey,
+                reservationId: id,
+              });
+            });
+            return { kind: "reservation" as const, reservationId };
+          }
+          const requestId = await finalizeRideRequest(ctx.user, context, "toss", async (id) => {
             await updatePaymentStatus(payment.id, "paid", {
               paidAt: new Date(),
               tossPaymentKey: tossPayment.paymentKey,
-              reservationId: id,
+              rideRequestId: id,
             });
           });
-          return { kind: "reservation" as const, reservationId };
+          return { kind: "rideRequest" as const, requestId };
         } catch (error) {
-          // attachPayment 이후(예약 커밋 이후)의 부수 단계에서 실패한 경우
-          // 예약 자체는 성공했으므로 결제를 취소하면 안 된다.
+          // attachPayment 이후(예약/신청 커밋 이후)의 부수 단계에서 실패한
+          // 경우 본체는 성공했으므로 결제를 취소하면 안 된다.
           const current = await getPaymentByOrderId(input.orderId);
-          if (current?.status === "paid" && current.reservationId) {
+          if (current?.status === "paid" && context.kind === "reservation" && current.reservationId) {
             console.error("[payments.confirmToss] post-reservation step failed (kept):", error);
             return { kind: "reservation" as const, reservationId: current.reservationId };
           }
+          if (current?.status === "paid" && context.kind === "rideRequest" && current.rideRequestId) {
+            console.error("[payments.confirmToss] post-request step failed (kept):", error);
+            return { kind: "rideRequest" as const, requestId: current.rideRequestId };
+          }
 
-          // 승인됐는데 좌석 확보 실패(경쟁 상황): 즉시 전액 자동 취소.
+          // 승인됐는데 확정 실패(좌석 경쟁/동결 경쟁): 즉시 전액 자동 취소.
           try {
             await cancelTossPayment({
               paymentKey: tossPayment.paymentKey,
@@ -915,64 +980,9 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
-        const event = await getEventById(input.eventId);
-        if (!event) throw new TRPCError({ code: "NOT_FOUND", message: "이벤트를 찾을 수 없습니다." });
-        if (!event.autoMatchEnabled) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "이 이벤트는 자동 배차를 지원하지 않습니다." });
-        }
-        if (event.matchingFrozenAt) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "이미 배차가 확정된 이벤트입니다." });
-        }
-        if (!event.autoMatchPricePerSeat) {
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "이벤트 가격 설정이 없습니다." });
-        }
-
-        // Price is always computed server-side from the event's fixed price,
-        // never trusted from the client, to prevent price tampering.
-        const fareAmount = event.autoMatchPricePerSeat * input.seats;
-        validatePointsUsage(input.pointsUsed, ctx.user.pointsBalance, fareAmount);
-        const totalAmount = fareAmount - input.pointsUsed;
-
-        let referrerId: number | undefined;
-        if (input.referralCode) {
-          const referrer = await getUserByReferralCode(input.referralCode);
-          if (referrer && referrer.id !== ctx.user.id) {
-            referrerId = referrer.id;
-          }
-        }
-
-        const requestId = await createRideRequest({
-          eventId: input.eventId,
-          userId: ctx.user.id,
-          originAddress: input.originAddress,
-          originLat: input.originLat,
-          originLng: input.originLng,
-          targetArrivalAt: new Date(input.targetArrivalAt),
-          seats: input.seats,
-          totalAmount,
-          pointsUsed: input.pointsUsed,
-          passengerName: input.passengerName,
-          passengerPhone: input.passengerPhone,
-          passengerEmail: input.passengerEmail,
-          referralCodeUsed: input.referralCode,
-          paymentMethod: input.paymentMethod ?? "mock",
-          status: "pending",
-        });
-
-        if (input.pointsUsed > 0) {
-          await addPoints(ctx.user.id, -input.pointsUsed, "usage", "참가 신청 포인트 사용", String(requestId));
-        }
-
-        if (referrerId) {
-          await createReferral({
-            referrerId,
-            refereeId: ctx.user.id,
-            status: "completed",
-          });
-          await addPoints(referrerId, 2000, "referral_earn", "친구 초대 적립", String(requestId));
-          await addPoints(ctx.user.id, 1000, "referral_earn", "초대 코드 사용 적립", String(requestId));
-        }
-
+        // Mock (demo) payment path. The Toss path goes through
+        // payments.createTossOrder(kind: "rideRequest") → confirmToss.
+        const requestId = await finalizeRideRequest(ctx.user, input, input.paymentMethod ?? "mock");
         return { id: requestId };
       }),
 
@@ -986,6 +996,28 @@ export const appRouter = router({
         }
         if (req.status !== "pending") {
           throw new TRPCError({ code: "BAD_REQUEST", message: "이미 매칭이 진행된 신청은 취소할 수 없습니다." });
+        }
+
+        // 토스 선결제 신청이면 남은 금액 전액 취소. 실패 시 신청 취소도
+        // 중단해 사용자가 재시도할 수 있게 한다.
+        const payment = await getLatestPaymentByRideRequestId(req.id);
+        if (payment && payment.status === "paid") {
+          const remaining = payment.totalAmount - payment.refundedAmount;
+          try {
+            await refundTossPaymentIfNeeded(payment, remaining, "참가 신청 취소 환불");
+          } catch (error) {
+            console.error(`[rideRequests.cancel] toss refund failed for payment ${payment.id}:`, error);
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "환불 처리에 실패했습니다. 잠시 후 다시 시도해주세요.",
+            });
+          }
+          await updatePaymentStatus(payment.id, "cancelled", {
+            cancelledAt: new Date(),
+            cancelReason: "user_request",
+            cancelNote: `참가 신청 취소 (환불액 ${remaining}원)`,
+            refundedAmount: payment.totalAmount,
+          });
         }
 
         await updateRideRequestStatus(req.id, "failed_refunded", { refundedAt: new Date() });
@@ -1121,7 +1153,15 @@ export const appRouter = router({
         }),
 
       commit: adminProcedure
-        .input(z.object({ eventId: z.number(), params: pipelineParamsInput }))
+        .input(
+          z.object({
+            eventId: z.number(),
+            params: pipelineParamsInput,
+            // 관리자가 실제 대절가 기준으로 입력하는 트립 최종 1인 가격.
+            // 생략하면 상한가 그대로 확정(차액 0). 상한가 초과는 거부.
+            finalPricePerSeat: z.number().int().positive().optional(),
+          })
+        )
         .mutation(async ({ input, ctx }) => {
           const event = await getEventById(input.eventId);
           if (!event) throw new TRPCError({ code: "NOT_FOUND" });
@@ -1131,6 +1171,15 @@ export const appRouter = router({
           if (!event.lat || !event.lng) {
             throw new TRPCError({ code: "BAD_REQUEST", message: "이벤트에 좌표(장소)가 설정되어 있지 않습니다." });
           }
+
+          const capPricePerSeat = event.autoMatchPricePerSeat ?? 0;
+          if (input.finalPricePerSeat !== undefined && input.finalPricePerSeat > capPricePerSeat) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `최종 가격은 상한가(${capPricePerSeat}원) 이하여야 합니다.`,
+            });
+          }
+          const finalPricePerSeat = input.finalPricePerSeat ?? capPricePerSeat;
 
           const resolvedParams = resolvePipelineParams(input.params);
 
@@ -1215,7 +1264,7 @@ export const appRouter = router({
               status: "collecting",
               minCount: resolvedParams.minCapacitySeats,
               maxCount: resolvedParams.maxCapacitySeats,
-              price: event.autoMatchPricePerSeat ?? 0,
+              price: finalPricePerSeat,
               departureAt: route.departureAt,
               isRoundTrip: false,
               creatorId: ctx.user.id,
@@ -1260,12 +1309,46 @@ export const appRouter = router({
                   referralCode: request.referralCodeUsed ?? undefined,
                 });
 
-                await createPaymentWithItems({
-                  reservationId,
-                  method: "mock",
-                  chargeType: "prepaid",
-                  items: [{ type: "fare", amount: request.totalAmount, label: "셔틀 요금" }],
-                });
+                // 토스 선결제 신청은 신청 시점 결제를 예약에 연결하고 상한가
+                // 대비 차액을 부분취소로 환불한다. 환불 실패는 커밋 전체를
+                // 막지 않고 기록 + 운영자 통보 후 계속 진행.
+                const existingPayment = await getLatestPaymentByRideRequestId(request.id);
+                if (existingPayment && existingPayment.method === "toss" && existingPayment.status === "paid") {
+                  await updatePaymentStatus(existingPayment.id, "paid", { reservationId });
+                  try {
+                    await applyRideRequestDifferenceRefund(existingPayment, {
+                      userId: request.userId,
+                      requestId: request.id,
+                      seats: request.seats,
+                      capPricePerSeat,
+                      finalPricePerSeat,
+                    });
+                  } catch (error) {
+                    console.error(
+                      `[admin.matching.commit] difference refund failed for request ${request.id} (payment ${existingPayment.id}):`,
+                      error
+                    );
+                    await notifyOwner({
+                      title: "[번개GO] 차액 환불 실패 - 수동 처리 필요",
+                      content: `신청 #${request.id} / payment #${existingPayment.id}: 상한가 ${capPricePerSeat}원 → 확정가 ${finalPricePerSeat}원 차액 환불에 실패했습니다.`,
+                    }).catch(() => false);
+                  }
+                } else {
+                  // mock 신청: 확정가 기준 결제 기록 생성 (finalPricePerSeat
+                  // 미입력 시 상한가 그대로 = 기존 동작).
+                  await createPaymentWithItems({
+                    reservationId,
+                    method: "mock",
+                    chargeType: "prepaid",
+                    items: [
+                      {
+                        type: "fare",
+                        amount: Math.max(0, finalPricePerSeat * request.seats - request.pointsUsed),
+                        label: "셔틀 요금",
+                      },
+                    ],
+                  });
+                }
 
                 await notifyTrip(
                   tripId,
@@ -1301,7 +1384,37 @@ export const appRouter = router({
             (r) => r.status === "pending" || r.status === "clustered"
           );
 
+          // 미매칭 신청 환불: 토스 선결제는 남은 금액 전액 취소. 개별
+          // try-catch로 한 건의 실패가 나머지를 막지 않으며, 환불에 실패한
+          // 신청은 상태를 바꾸지 않고(돈이 안 돌아갔으므로 refunded로 표시
+          // 금지) 운영자 통보 대상으로 남긴다.
+          let refundFailures = 0;
           for (const req of unmatched) {
+            const payment = await getLatestPaymentByRideRequestId(req.id);
+            if (payment && payment.status === "paid") {
+              const remaining = payment.totalAmount - payment.refundedAmount;
+              try {
+                await refundTossPaymentIfNeeded(payment, remaining, "배차 동결 미매칭 전액 환불");
+                await updatePaymentStatus(payment.id, "cancelled", {
+                  cancelledAt: new Date(),
+                  cancelReason: "trip_not_confirmed",
+                  cancelNote: `배차 동결 미매칭 환불 (환불액 ${remaining}원)`,
+                  refundedAmount: payment.totalAmount,
+                });
+              } catch (error) {
+                refundFailures++;
+                console.error(`[admin.matching.freeze] toss refund failed for request ${req.id} (payment ${payment.id}):`, error);
+                try {
+                  await updatePaymentStatus(payment.id, "paid", {
+                    cancelNote: `동결 미매칭 환불 실패 - 수동 재시도 필요 (환불 예정액 ${remaining}원)`,
+                  });
+                } catch (noteError) {
+                  console.error("[admin.matching.freeze] failed to record refund failure:", noteError);
+                }
+                continue;
+              }
+            }
+
             await updateRideRequestStatus(req.id, "failed_refunded", { refundedAt: new Date() });
             if (req.pointsUsed > 0) {
               await addPoints(req.userId, req.pointsUsed, "refund", "배차 동결 미매칭 환불", String(req.id));
@@ -1312,10 +1425,10 @@ export const appRouter = router({
 
           await notifyOwner({
             title: `[번개GO] ${event.title} 배차 동결 완료`,
-            content: `동결 시점 미매칭 ${unmatched.length}건 환불 처리되었습니다.`,
+            content: `동결 시점 미매칭 ${unmatched.length}건 환불 처리되었습니다.${refundFailures > 0 ? ` (토스 환불 실패 ${refundFailures}건 - 수동 처리 필요)` : ""}`,
           }).catch(() => false);
 
-          return { success: true, refundedCount: unmatched.length };
+          return { success: true, refundedCount: unmatched.length - refundFailures, refundFailures };
         }),
     }),
   }),

@@ -5,6 +5,7 @@ import {
   addPoints,
   confirmTripIfCollecting,
   createReferral,
+  createRideRequest,
   getEventById,
   getReferralByPair,
   getReservationsWithPaymentsByTripId,
@@ -58,7 +59,9 @@ export async function maybeConfirmTrip(tripId: number): Promise<void> {
 // Stored server-side on the pending payment row at order creation, so the
 // confirm step never has to trust order details from the client again — only
 // paymentKey/orderId/amount come back through the redirect.
-export type TossOrderContext = { kind: "reservation"; userId: number } & ReservationOrderInput;
+export type TossOrderContext =
+  | ({ kind: "reservation"; userId: number } & ReservationOrderInput)
+  | ({ kind: "rideRequest"; userId: number } & RideRequestOrderInput);
 
 // ─── Shared reservation creation flow ─────────────────────────────────────────
 export interface ReservationOrderInput {
@@ -170,4 +173,95 @@ export async function finalizeReservation(
   }
 
   return reservationId;
+}
+
+// ─── Shared ride-request creation flow (track B, auto-match) ──────────────────
+export interface RideRequestOrderInput {
+  eventId: number;
+  originAddress?: string;
+  originLat: string;
+  originLng: string;
+  /** epoch ms */
+  targetArrivalAt: number;
+  seats: number;
+  passengerName: string;
+  passengerPhone: string;
+  passengerEmail?: string;
+  pointsUsed: number;
+  referralCode?: string;
+}
+
+/**
+ * 자동매칭 참가 신청 생성. mock 경로(rideRequests.create)와 Toss confirm
+ * 경로가 공유한다. 결제 금액은 항상 서버가 이벤트 상한가(autoMatchPricePerSeat)
+ * 기준으로 계산하며, `attachPayment`는 신청 insert 직후(포인트/추천 처리 전)
+ * 실행된다 (toss: 결제 레코드에 rideRequestId 연결).
+ */
+export async function finalizeRideRequest(
+  user: User,
+  input: RideRequestOrderInput,
+  paymentMethod: string,
+  attachPayment?: (requestId: number) => Promise<void>
+): Promise<number> {
+  const event = await getEventById(input.eventId);
+  if (!event) throw new TRPCError({ code: "NOT_FOUND", message: "이벤트를 찾을 수 없습니다." });
+  if (!event.autoMatchEnabled) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "이 이벤트는 자동 배차를 지원하지 않습니다." });
+  }
+  if (event.matchingFrozenAt) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "이미 배차가 확정된 이벤트입니다." });
+  }
+  if (!event.autoMatchPricePerSeat) {
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "이벤트 가격 설정이 없습니다." });
+  }
+
+  // Price is always computed server-side from the event's fixed price,
+  // never trusted from the client, to prevent price tampering.
+  const fareAmount = event.autoMatchPricePerSeat * input.seats;
+  validatePointsUsage(input.pointsUsed, user.pointsBalance, fareAmount);
+  const totalAmount = fareAmount - input.pointsUsed;
+
+  let referrerId: number | undefined;
+  if (input.referralCode) {
+    const referrer = await getUserByReferralCode(input.referralCode);
+    if (referrer && referrer.id !== user.id) {
+      referrerId = referrer.id;
+    }
+  }
+
+  const requestId = await createRideRequest({
+    eventId: input.eventId,
+    userId: user.id,
+    originAddress: input.originAddress,
+    originLat: input.originLat,
+    originLng: input.originLng,
+    targetArrivalAt: new Date(input.targetArrivalAt),
+    seats: input.seats,
+    totalAmount,
+    pointsUsed: input.pointsUsed,
+    passengerName: input.passengerName,
+    passengerPhone: input.passengerPhone,
+    passengerEmail: input.passengerEmail,
+    referralCodeUsed: input.referralCode,
+    paymentMethod,
+    status: "pending",
+  });
+
+  if (attachPayment) await attachPayment(requestId);
+
+  if (input.pointsUsed > 0) {
+    await addPoints(user.id, -input.pointsUsed, "usage", "참가 신청 포인트 사용", String(requestId));
+  }
+
+  if (referrerId) {
+    await createReferral({
+      referrerId,
+      refereeId: user.id,
+      status: "completed",
+    });
+    await addPoints(referrerId, 2000, "referral_earn", "친구 초대 적립", String(requestId));
+    await addPoints(user.id, 1000, "referral_earn", "초대 코드 사용 적립", String(requestId));
+  }
+
+  return requestId;
 }

@@ -191,6 +191,15 @@ export const payments = mysqlTable(
       .notNull(),
     method: mysqlEnum("method", PAYMENT_METHODS).notNull(),
     chargeType: mysqlEnum("chargeType", CHARGE_TYPES).default("prepaid").notNull(),
+    // Track B (auto-match): the ride request this payment funds. Set at
+    // confirm time; survives matching recomputes (reservations get rebuilt,
+    // the payment doesn't) and is how commit finds the payment to link the
+    // final reservation and refund the cap-vs-final difference against.
+    rideRequestId: int("rideRequestId"),
+    // Cumulative amount already refunded via Toss partial cancels (difference
+    // refunds). Lets a matching recompute top up to a new target instead of
+    // double-refunding.
+    refundedAmount: int("refundedAmount").default(0).notNull(),
     // Merchant-generated order number handed to Toss; unique so the confirm
     // callback can resolve exactly one pending order.
     orderId: varchar("orderId", { length: 64 }),
@@ -210,6 +219,7 @@ export const payments = mysqlTable(
   },
   (table) => [
     index("payments_reservation_idx").on(table.reservationId),
+    index("payments_ride_request_idx").on(table.rideRequestId),
     uniqueIndex("payments_order_id_idx").on(table.orderId),
   ]
 );
