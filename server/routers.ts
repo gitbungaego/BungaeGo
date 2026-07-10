@@ -73,7 +73,7 @@ import {
   updateTripStatus,
   updateUserStatus,
 } from "./db";
-import { buildFareItems, cancelReservationsForTrip, computeRefundableAmount } from "./payments";
+import { buildFareItems, cancelReservationsForTrip, computeRefundableAmount, refundTossPaymentIfNeeded } from "./payments";
 import { finalizeReservation, maybeConfirmTrip, validatePointsUsage, type TossOrderContext } from "./reservationFlow";
 import { cancelTossPayment, confirmTossPayment, isTossEnabled, TossApiError } from "./toss";
 import { nanoid } from "nanoid";
@@ -519,6 +519,19 @@ export const appRouter = router({
             (sum, item) => sum + computeRefundableAmount(item, trip, res.createdAt, now, "user_request"),
             0
           );
+          // 토스 실결제는 수수료 정책 반영액만큼 실제 취소(부분/전액)한다.
+          // 실패 시 로컬 취소도 중단해 사용자가 재시도할 수 있게 한다.
+          if (payment.status === "paid") {
+            try {
+              await refundTossPaymentIfNeeded(payment, refundTotal, "사용자 예약 취소");
+            } catch (error) {
+              console.error(`[reservations.cancel] toss refund failed for payment ${payment.id}:`, error);
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: "환불 처리에 실패했습니다. 잠시 후 다시 시도해주세요.",
+              });
+            }
+          }
           await updatePaymentStatus(payment.id, "cancelled", {
             cancelledAt: now,
             cancelReason: "user_request",
@@ -578,10 +591,22 @@ export const appRouter = router({
         const payment = await getLatestPaymentByReservationId(res.id);
         if (payment) {
           const items = await getPaymentItemsByPaymentId(payment.id);
+          // 관리자 취소는 수수료 없이 항상 전액 환불 → 토스도 전액취소.
           const refundTotal = items.reduce(
             (sum, item) => sum + computeRefundableAmount(item, trip, res.createdAt, now, "admin"),
             0
           );
+          if (payment.status === "paid") {
+            try {
+              await refundTossPaymentIfNeeded(payment, refundTotal, "관리자 취소 전액 환불");
+            } catch (error) {
+              console.error(`[reservations.adminCancel] toss refund failed for payment ${payment.id}:`, error);
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: "토스 환불 처리에 실패했습니다. 잠시 후 다시 시도해주세요.",
+              });
+            }
+          }
           await updatePaymentStatus(payment.id, "cancelled", {
             cancelledAt: now,
             cancelReason: "admin",

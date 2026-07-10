@@ -1,4 +1,4 @@
-import { PaymentCancelReason, PaymentItem, PaymentItemType, Trip } from "../drizzle/schema";
+import { Payment, PaymentCancelReason, PaymentItem, PaymentItemType, Trip } from "../drizzle/schema";
 import { evaluateCancellation } from "@shared/cancellationPolicy";
 import {
   addPoints,
@@ -8,6 +8,7 @@ import {
   getReservationsByTripId,
   updatePaymentStatus,
 } from "./db";
+import { cancelTossPayment } from "./toss";
 
 // ─── Payment item builder ─────────────────────────────────────────────────────
 export interface CreatePaymentItemInput {
@@ -80,7 +81,39 @@ export function computeRefundableAmount(
   return policy.refundableAmount(item, trip, reservationCreatedAt, now);
 }
 
+// ─── Toss refund bridge ───────────────────────────────────────────────────────
+/**
+ * method='toss'인 결제에 대해 환불액만큼 Toss 취소 API를 호출한다.
+ * - refundTotal(아이템별 환불 정책 합계)은 discount 라인이 음수로 상쇄돼
+ *   이미 "현금 환불액"이다 - 포인트 환불은 기존 내부 로직(addPoints)이
+ *   따로 처리하며 Toss와 무관하다.
+ * - 전액(= totalAmount)이면 cancelAmount를 생략해 전액취소, 아니면 부분취소.
+ * - 멱등키는 결제/금액 조합으로 고정: 네트워크 오류 후 재시도가 이중
+ *   환불이 되지 않는다. 이미 취소된 결제 재취소는 성공으로 간주된다
+ *   (cancelTossPayment 내부에서 ALREADY_CANCELED_PAYMENT 흡수).
+ * - mock 등 다른 결제수단은 no-op.
+ */
+export async function refundTossPaymentIfNeeded(
+  payment: Payment,
+  refundAmount: number,
+  cancelReason: string
+): Promise<void> {
+  if (payment.method !== "toss" || refundAmount <= 0) return;
+  if (!payment.tossPaymentKey) {
+    throw new Error(`toss payment ${payment.id} has no paymentKey - cannot refund`);
+  }
+  await cancelTossPayment({
+    paymentKey: payment.tossPaymentKey,
+    cancelReason,
+    cancelAmount: refundAmount >= payment.totalAmount ? undefined : refundAmount,
+    idempotencyKey: `refund-${payment.id}-${refundAmount}`,
+  });
+}
+
 // ─── Trip cancellation cascade ────────────────────────────────────────────────
+// D-5 minCount 미달 자동취소 등에서 호출. 예약별 개별 try-catch: 한 건의
+// Toss 취소 실패가 나머지 예약 환불을 막지 않고, 실패 건은 결제를 paid로
+// 남겨(재시도 가능) cancelNote에 실패 기록을 남긴다.
 export async function cancelReservationsForTrip(trip: Trip): Promise<void> {
   const now = new Date();
   const tripReservations = await getReservationsByTripId(trip.id);
@@ -94,6 +127,24 @@ export async function cancelReservationsForTrip(trip: Trip): Promise<void> {
       (sum, item) => sum + computeRefundableAmount(item, trip, reservation.createdAt, now, "trip_not_confirmed"),
       0
     );
+
+    try {
+      await refundTossPaymentIfNeeded(payment, refundTotal, "트립 미확정 자동 환불");
+    } catch (error) {
+      console.error(
+        `[cancelReservationsForTrip] toss refund failed for reservation ${reservation.id} (payment ${payment.id}):`,
+        error
+      );
+      // 재시도 가능하도록 paid 상태 유지 + 실패 기록. 다음 예약 처리는 계속.
+      try {
+        await updatePaymentStatus(payment.id, "paid", {
+          cancelNote: `트립 미확정 자동 환불 실패 - 수동 재시도 필요 (환불 예정액 ${refundTotal}원)`,
+        });
+      } catch (noteError) {
+        console.error("[cancelReservationsForTrip] failed to record refund failure:", noteError);
+      }
+      continue;
+    }
 
     await updatePaymentStatus(payment.id, "cancelled", {
       cancelledAt: now,
