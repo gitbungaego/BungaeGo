@@ -73,6 +73,8 @@ export default function EventDetailPage({ id }: Props) {
   const markersRef = useRef<any[]>([]);
   const demandMarkersRef = useRef<any[]>([]);
   const candidateMarkersRef = useRef<any[]>([]);
+  const boardingClustererRef = useRef<any>(null);
+  const candidateClustererRef = useRef<any>(null);
 
   const { data: selectedBoardingDetail, isLoading: selectedBoardingLoading } =
     trpc.boardingPoints.detailById.useQuery(
@@ -118,8 +120,11 @@ export default function EventDetailPage({ id }: Props) {
   useEffect(() => {
     if (!map || !window.kakao || !event) return;
 
+    boardingClustererRef.current?.clear();
+    boardingClustererRef.current = null;
     markersRef.current.forEach((marker) => marker.setMap(null));
     markersRef.current = [];
+    const clusterableBoardingMarkers: any[] = [];
 
     const bounds = new window.kakao.maps.LatLngBounds();
     let hasBounds = false;
@@ -154,12 +159,23 @@ export default function EventDetailPage({ id }: Props) {
         }
       );
       markersRef.current.push(marker);
+      clusterableBoardingMarkers.push(marker);
       bounds.extend(new window.kakao.maps.LatLng(Number(bp.lat), Number(bp.lng)));
       hasBounds = true;
     });
 
     if (hasBounds) {
       map.setBounds(bounds);
+    }
+
+    if (clusterableBoardingMarkers.length > 0 && window.kakao.maps.MarkerClusterer) {
+      boardingClustererRef.current = new window.kakao.maps.MarkerClusterer({
+        map,
+        markers: clusterableBoardingMarkers,
+        minLevel: 6,
+        minClusterSize: 3,
+        averageCenter: true,
+      });
     }
   }, [map, allBoardingPoints, selectedTrip?.id, selectedTripPoints, event, selectBoardingPointFromMarker]);
 
@@ -199,6 +215,8 @@ export default function EventDetailPage({ id }: Props) {
   useEffect(() => {
     if (!map || !window.kakao || !event) return;
 
+    candidateClustererRef.current?.clear();
+    candidateClustererRef.current = null;
     candidateMarkersRef.current.forEach((marker) => marker.setMap(null));
     candidateMarkersRef.current = [];
 
@@ -229,12 +247,24 @@ export default function EventDetailPage({ id }: Props) {
       );
       candidateMarkersRef.current.push(marker);
     });
+
+    if (candidateMarkersRef.current.length > 0 && window.kakao.maps.MarkerClusterer) {
+      candidateClustererRef.current = new window.kakao.maps.MarkerClusterer({
+        map,
+        markers: candidateMarkersRef.current,
+        minLevel: 6,
+        minClusterSize: 3,
+        averageCenter: true,
+      });
+    }
   }, [map, rallyPointCandidates, event, nearbyDemandFor]);
 
   // Belt-and-suspenders cleanup on unmount (each effect above already clears
   // its own markers at the start of every re-run).
   useEffect(() => {
     return () => {
+      boardingClustererRef.current?.clear();
+      candidateClustererRef.current?.clear();
       markersRef.current.forEach((marker) => marker.setMap(null));
       demandMarkersRef.current.forEach((circle) => circle.setMap(null));
       candidateMarkersRef.current.forEach((marker) => marker.setMap(null));

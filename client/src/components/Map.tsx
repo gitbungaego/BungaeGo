@@ -65,7 +65,7 @@ function loadMapScript(): Promise<void> {
       return;
     }
     const script = document.createElement("script");
-    script.src = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${APP_KEY}&autoload=false&libraries=services`;
+    script.src = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${APP_KEY}&autoload=false&libraries=services,clusterer`;
     script.async = true;
     script.onload = () => {
       window.kakao.maps.load(() => resolve());
