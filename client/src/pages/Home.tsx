@@ -52,7 +52,7 @@ export default function Home() {
             <h1 className="text-4xl sm:text-5xl font-bold tracking-tight leading-tight">
               콘서트·스포츠·페스티발
               <br />
-              <span className="gradient-text">함께 타면 더 빠른게</span>
+              <span className="gradient-text">함께 타면 더 빠르게</span>
             </h1>
             <p className="text-lg text-muted-foreground leading-relaxed">
               원하는 이벤트의 셔틀을 직접 만들고, 친구들과 공유해 버스를 채우세요.
