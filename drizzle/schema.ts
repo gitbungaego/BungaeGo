@@ -69,6 +69,10 @@ export const events = mysqlTable("events", {
   autoMatchEnabled: boolean("autoMatchEnabled").default(false).notNull(),
   autoMatchPricePerSeat: int("autoMatchPricePerSeat"),
   matchingFrozenAt: timestamp("matchingFrozenAt"),
+  // Who froze the matching: "admin" (manual freeze button) or "auto" (D-7
+  // scheduler). Null while unfrozen. Purely informational for the admin UI —
+  // the freeze itself is gated on matchingFrozenAt.
+  matchingFrozenBy: mysqlEnum("matchingFrozenBy", ["admin", "auto"]),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

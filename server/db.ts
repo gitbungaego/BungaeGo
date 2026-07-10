@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, like, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { createPool, type PoolOptions } from "mysql2/promise";
 import {
@@ -50,6 +50,7 @@ import {
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { nanoid } from "nanoid";
+import type { PipelineOutput } from "./matching/pipeline";
 
 let _db: ReturnType<typeof createMysqlDb> | null = null;
 
@@ -307,6 +308,46 @@ export async function updateEvent(id: number, data: Partial<InsertEvent>): Promi
   const db = await getDb();
   if (!db) return;
   await db.update(events).set(data).where(eq(events.id, id));
+}
+
+/**
+ * Atomically claim the freeze for an event: sets matchingFrozenAt/By only if
+ * it is still null. Returns true iff this call won the race (affected a row).
+ * The auto-freeze scheduler uses this as a preemption lock so two ticks (or a
+ * tick racing an admin) can never both process the same event.
+ */
+export async function freezeEventIfUnfrozen(
+  eventId: number,
+  frozenBy: "admin" | "auto"
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const result = await db
+    .update(events)
+    .set({ matchingFrozenAt: new Date(), matchingFrozenBy: frozenBy })
+    .where(and(eq(events.id, eventId), isNull(events.matchingFrozenAt)));
+  // mysql2 returns affectedRows on the ResultSetHeader.
+  return ((result[0] as any)?.affectedRows ?? 0) > 0;
+}
+
+/**
+ * Auto-freeze candidates: active, auto-match-enabled events that are not yet
+ * frozen. The D-7 boundary itself is applied by the caller against eventDate
+ * (KST), since that lives in shared/cancellationPolicy.
+ */
+export async function getUnfrozenAutoMatchEvents(): Promise<Event[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(events)
+    .where(
+      and(
+        eq(events.status, "active"),
+        eq(events.autoMatchEnabled, true),
+        isNull(events.matchingFrozenAt)
+      )
+    );
 }
 
 // ─── Trips ────────────────────────────────────────────────────────────────────
@@ -964,6 +1005,271 @@ export async function deleteClustersByEventId(eventId: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
   await db.delete(clusters).where(eq(clusters.eventId, eventId));
+}
+
+// ─── Matching commit (transactional) ──────────────────────────────────────────
+export interface PersistMatchingInput {
+  eventId: number;
+  creatorId: number;
+  minCount: number;
+  maxCount: number;
+  finalPricePerSeat: number;
+  output: PipelineOutput;
+  stopNameById: Map<number, string>;
+  requestById: Map<number, RideRequest>;
+  // Only paid Toss payments, keyed by rideRequestId — used to link the
+  // payment to the new reservation (inside the tx) and to schedule the
+  // cap-vs-final difference refund (outside the tx, by the caller).
+  tossPaymentByRequestId: Map<number, Payment>;
+}
+
+export interface PersistMatchingResult {
+  createdTripIds: number[];
+  createdTripCount: number;
+  matchedRequestCount: number;
+  differenceRefunds: { payment: Payment; userId: number; requestId: number; seats: number }[];
+  notifications: { tripId: number; userId: number; passengerName: string; seats: number; departureAt: Date }[];
+}
+
+export interface PersistMatchingHooks {
+  // Test-only seam: invoked once after the first trip (and its members) are
+  // fully persisted, to force a mid-transaction failure and prove rollback.
+  failAfterFirstTrip?: () => void | Promise<void>;
+}
+
+/**
+ * Persists an entire matching pipeline result for one event in a SINGLE DB
+ * transaction: clears any prior (still-collecting) pipeline output, inserts
+ * clusters + trips + boarding points + reservations, links/creates payments,
+ * and finalizes each matched ride request. Any mid-way failure rolls the
+ * whole thing back, so the event is never left half-matched.
+ *
+ * External side effects (Toss difference refunds, notifications, D-5 instant
+ * confirm) are deliberately NOT done here — they run after commit, driven by
+ * the returned differenceRefunds/notifications. The freeze mark is set by the
+ * caller BEFORE calling this, outside the transaction.
+ */
+export async function persistMatchingCommit(
+  input: PersistMatchingInput,
+  hooks: PersistMatchingHooks = {}
+): Promise<PersistMatchingResult> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+
+  const {
+    eventId,
+    creatorId,
+    minCount,
+    maxCount,
+    finalPricePerSeat,
+    output,
+    stopNameById,
+    requestById,
+    tossPaymentByRequestId,
+  } = input;
+
+  return db.transaction(async (tx) => {
+    // ── Cleanup prior pipeline output (idempotent recompute) ──
+    const priorTrips = await tx
+      .select()
+      .from(trips)
+      .where(and(eq(trips.eventId, eventId), isNotNull(trips.sourceClusterId), eq(trips.status, "collecting")));
+
+    for (const trip of priorTrips) {
+      // Pull matched requests back into the pending pool.
+      await tx
+        .update(rideRequests)
+        .set({ clusterId: null, tripId: null, boardingPointId: null, reservationId: null, status: "pending" })
+        .where(eq(rideRequests.tripId, trip.id));
+
+      const priorReservations = await tx
+        .select({ id: reservations.id })
+        .from(reservations)
+        .where(eq(reservations.tripId, trip.id));
+      const priorReservationIds = priorReservations.map((r) => r.id);
+
+      if (priorReservationIds.length > 0) {
+        const priorPayments = await tx
+          .select({ id: payments.id, method: payments.method })
+          .from(payments)
+          .where(inArray(payments.reservationId, priorReservationIds));
+        // Real (toss) payment rows are money-of-record: unlink from the
+        // reservation instead of deleting; mock rows are deletable.
+        const tossPaymentIds = priorPayments.filter((p) => p.method === "toss").map((p) => p.id);
+        const mockPaymentIds = priorPayments.filter((p) => p.method !== "toss").map((p) => p.id);
+        if (tossPaymentIds.length > 0) {
+          await tx.update(payments).set({ reservationId: null }).where(inArray(payments.id, tossPaymentIds));
+        }
+        if (mockPaymentIds.length > 0) {
+          await tx.delete(paymentItems).where(inArray(paymentItems.paymentId, mockPaymentIds));
+          await tx.delete(payments).where(inArray(payments.id, mockPaymentIds));
+        }
+        await tx.delete(reservations).where(inArray(reservations.id, priorReservationIds));
+      }
+
+      await tx.delete(boardingPoints).where(eq(boardingPoints.tripId, trip.id));
+      await tx.delete(trips).where(eq(trips.id, trip.id));
+    }
+
+    // Reset still-clustered requests and drop prior clusters.
+    await tx
+      .update(rideRequests)
+      .set({ clusterId: null, status: "pending" })
+      .where(and(eq(rideRequests.eventId, eventId), eq(rideRequests.status, "clustered")));
+    await tx.delete(clusters).where(eq(clusters.eventId, eventId));
+
+    // ── Persist clusters + assignments ──
+    const dbClusterIdByPipelineClusterId = new Map<number, number>();
+    const clusterResultByPipelineClusterId = new Map(output.clusters.map((c) => [c.clusterId, c]));
+
+    for (const cluster of output.clusters) {
+      const inserted = await tx.insert(clusters).values({
+        eventId,
+        groupKey: cluster.groupKey,
+        status: cluster.status,
+        assignedStopId: cluster.assignedStopId,
+        assignedLat: String(cluster.assignedLat),
+        assignedLng: String(cluster.assignedLng),
+        isAdHocStop: cluster.isAdHocStop,
+        size: cluster.memberRequestIds.length,
+      });
+      const dbClusterId = (inserted[0] as any).insertId;
+      dbClusterIdByPipelineClusterId.set(cluster.clusterId, dbClusterId);
+      if (cluster.status !== "failed" && cluster.memberRequestIds.length > 0) {
+        await tx
+          .update(rideRequests)
+          .set({ clusterId: dbClusterId, status: "clustered" })
+          .where(inArray(rideRequests.id, cluster.memberRequestIds));
+      }
+    }
+
+    // ── Persist trips + boarding points + reservations ──
+    const result: PersistMatchingResult = {
+      createdTripIds: [],
+      createdTripCount: 0,
+      matchedRequestCount: 0,
+      differenceRefunds: [],
+      notifications: [],
+    };
+
+    for (let routeIdx = 0; routeIdx < output.routes.length; routeIdx++) {
+      const route = output.routes[routeIdx];
+      const firstStop = route.stops[0];
+      const sourceClusterId = firstStop
+        ? dbClusterIdByPipelineClusterId.get(firstStop.clusterId) ?? null
+        : null;
+
+      const insertedTrip = await tx.insert(trips).values({
+        eventId,
+        mode: "bus",
+        status: "collecting",
+        minCount,
+        maxCount,
+        price: finalPricePerSeat,
+        departureAt: route.departureAt,
+        isRoundTrip: false,
+        creatorId,
+        sourceClusterId,
+      });
+      const tripId = (insertedTrip[0] as any).insertId;
+      result.createdTripIds.push(tripId);
+      let tripSeatCount = 0;
+
+      for (const stop of route.stops) {
+        const clusterResult = clusterResultByPipelineClusterId.get(stop.clusterId);
+        const dbClusterId = dbClusterIdByPipelineClusterId.get(stop.clusterId) ?? null;
+        const stopName = clusterResult?.assignedStopId
+          ? stopNameById.get(clusterResult.assignedStopId) ?? "정류장"
+          : "임시 정류장";
+
+        const insertedBp = await tx.insert(boardingPoints).values({
+          tripId,
+          name: stopName,
+          lat: String(stop.lat),
+          lng: String(stop.lng),
+          pickupTime: stop.pickupTime,
+          order: stop.order,
+        });
+        const boardingPointId = (insertedBp[0] as any).insertId;
+
+        if (dbClusterId !== null) {
+          await tx.update(clusters).set({ tripId }).where(eq(clusters.id, dbClusterId));
+        }
+
+        for (const requestId of clusterResult?.memberRequestIds ?? []) {
+          const request = requestById.get(requestId);
+          if (!request) continue;
+
+          const insertedReservation = await tx.insert(reservations).values({
+            userId: request.userId,
+            tripId,
+            boardingPointId,
+            seats: request.seats,
+            pointsUsed: 0,
+            passengerName: request.passengerName ?? undefined,
+            passengerPhone: request.passengerPhone ?? undefined,
+            passengerEmail: request.passengerEmail ?? undefined,
+            referralCode: request.referralCodeUsed ?? undefined,
+            qrToken: nanoid(32),
+          });
+          const reservationId = (insertedReservation[0] as any).insertId;
+
+          const tossPayment = tossPaymentByRequestId.get(request.id);
+          if (tossPayment) {
+            // Link the pre-paid Toss order to this reservation; the cap-vs-final
+            // difference refund runs after commit (external Toss API call).
+            await tx.update(payments).set({ reservationId }).where(eq(payments.id, tossPayment.id));
+            result.differenceRefunds.push({
+              payment: tossPayment,
+              userId: request.userId,
+              requestId: request.id,
+              seats: request.seats,
+            });
+          } else {
+            const insertedPayment = await tx.insert(payments).values({
+              reservationId,
+              totalAmount: Math.max(0, finalPricePerSeat * request.seats - request.pointsUsed),
+              status: "paid",
+              method: "mock",
+              chargeType: "prepaid",
+              paidAt: new Date(),
+            });
+            const paymentId = (insertedPayment[0] as any).insertId;
+            await tx.insert(paymentItems).values({
+              paymentId,
+              type: "fare",
+              amount: Math.max(0, finalPricePerSeat * request.seats - request.pointsUsed),
+              label: "셔틀 요금",
+            });
+          }
+
+          await tx
+            .update(rideRequests)
+            .set({ status: "route_confirmed", tripId, boardingPointId, reservationId })
+            .where(eq(rideRequests.id, request.id));
+
+          tripSeatCount += request.seats;
+          result.matchedRequestCount++;
+          result.notifications.push({
+            tripId,
+            userId: request.userId,
+            passengerName: request.passengerName ?? "고객",
+            seats: request.seats,
+            departureAt: route.departureAt,
+          });
+        }
+      }
+
+      await tx.update(trips).set({ currentCount: tripSeatCount }).where(eq(trips.id, tripId));
+      result.createdTripCount++;
+
+      if (routeIdx === 0 && hooks.failAfterFirstTrip) {
+        await hooks.failAfterFirstTrip();
+      }
+    }
+
+    return result;
+  });
 }
 
 // ─── Ride Requests ────────────────────────────────────────────────────────────

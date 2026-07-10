@@ -7,29 +7,15 @@ import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import {
   addPoints,
-  assignRideRequestsToCluster,
-  clearRideRequestClusterAssignments,
-  clearRideRequestsByTripId,
-  confirmTripIfCollecting,
   createBoardingPoint,
-  createCluster,
   createEvent,
   createPaymentWithItems,
-  createReferral,
-  createReservation,
-  createRideRequest,
   createStopCandidate,
   createTrip,
   decrementTripCount,
   deleteBoardingPoint,
-  deleteBoardingPointsByTripId,
-  deleteClustersByEventId,
-  deleteReservationsByTripId,
-  deleteTrip,
   ensureReferralCode,
-  finalizeRideRequestRoute,
   getActiveRallyPointCandidates,
-  getActiveStopCandidates,
   getAllEvents,
   getAllReservations,
   getAllStopCandidates,
@@ -38,7 +24,6 @@ import {
   getBoardingPointById,
   getBoardingPointsByEventId,
   getBoardingPointsByTripId,
-  getBusAccessibleRallyPointCandidates,
   getEventById,
   getEvents,
   getLatestPaymentByReservationId,
@@ -48,7 +33,6 @@ import {
   getPaymentItemsByPaymentId,
   getPendingRideRequestsByEventId,
   getPointsByUserId,
-  getReferralByPair,
   getReferralByReservationId,
   getReferralsByUserId,
   getReservationById,
@@ -56,16 +40,12 @@ import {
   getReservationsWithPaymentsByTripId,
   getRideRequestById,
   getRideRequestOriginsByEventId,
-  getRideRequestsByEventId,
   getRideRequestsByUserId,
   getTripById,
   getTripsByEventId,
   getUserByOpenId,
   getUserByReferralCode,
-  incrementTripCount,
-  reserveSeatsWithLock,
   setStopCandidateActive,
-  updateCluster,
   updateEvent,
   updateEventStatus,
   updatePaymentStatus,
@@ -75,7 +55,6 @@ import {
   updateUserStatus,
 } from "./db";
 import {
-  applyRideRequestDifferenceRefund,
   buildFareItems,
   cancelReservationsForTrip,
   computeRefundableAmount,
@@ -89,7 +68,11 @@ import { CONSENT_VERSIONS, recordConsent } from "./consents";
 import { isThemeAllowed } from "./featureFlags";
 import { getPolicy } from "./matching/confirmPolicy";
 import { notifyTrip } from "./notify/tripMessenger";
-import { runMatchingPipeline, type PipelineParams } from "./matching/pipeline";
+import { runMatchingPipeline } from "./matching/pipeline";
+import { pipelineParamsInput, resolvePipelineParams } from "./matching/matchingParams";
+import { executeMatching, getMatchingStopCandidates, RALLY_POINT_CANDIDATE_ID_OFFSET, MatchingError } from "./matching/executeMatching";
+import { refundUnmatchedRideRequests } from "./payments";
+import { freezeEventIfUnfrozen } from "./db";
 import { evaluateCancellation, isCreatedAfterOwnD5 } from "@shared/cancellationPolicy";
 import { USER_STATUSES } from "../drizzle/schema";
 import type { RideRequest, Trip } from "../drizzle/schema";
@@ -100,24 +83,8 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   return next({ ctx });
 });
 
-// ─── Matching pipeline params ─────────────────────────────────────────────────
-const pipelineParamsSchema = z.object({
-  bucketSizeMinutes: z.number().min(5).default(30),
-  epsMeters: z.number().min(50).default(800),
-  minPts: z.number().min(1).default(10),
-  maxSnapDistanceMeters: z.number().min(0).default(300),
-  maxCapacitySeats: z.number().min(1).default(45),
-  minCapacitySeats: z.number().min(1).default(15),
-  avgSpeedKmh: z.number().min(1).default(30),
-  stopDwellMinutes: z.number().min(0).default(3),
-  mergeMaxDetourMinutes: z.number().min(0).default(15),
-  mergeMaxDetourKm: z.number().min(0).default(10),
-});
-const pipelineParamsInput = pipelineParamsSchema.partial().optional();
-
-function resolvePipelineParams(input?: z.infer<typeof pipelineParamsInput>): PipelineParams {
-  return pipelineParamsSchema.parse(input ?? {});
-}
+// Matching pipeline params + defaults live in matching/matchingParams.ts so
+// the admin manual flow and the auto-freeze scheduler share one source.
 
 // Re-exported for existing importers; implementation moved to
 // server/reservationFlow.ts so the Toss confirm path can share it.
@@ -136,29 +103,8 @@ async function withAvailability(trip: Trip) {
 const DEMAND_STATUSES: RideRequest["status"][] = ["pending", "clustered"];
 const NEARBY_DEMAND_RADIUS_METERS = 1500;
 
-// Combined cluster-snap candidate pool for the matching pipeline: admin-vetted
-// stopCandidates plus community-sourced rallyPointCandidates marked
-// busAccessible. The two tables have independent id sequences, so rally point
-// ids are offset well out of stopCandidates' range before being handed to the
-// pipeline - assignedStopId has no FK constraint, it's purely an opaque
-// lookup key for stopNameById below.
-export const RALLY_POINT_CANDIDATE_ID_OFFSET = 1_000_000;
-
-export async function getMatchingStopCandidates(): Promise<{ id: number; lat: number; lng: number; name: string }[]> {
-  const [stops, rallyPoints] = await Promise.all([
-    getActiveStopCandidates(),
-    getBusAccessibleRallyPointCandidates(),
-  ]);
-  return [
-    ...stops.map((s) => ({ id: s.id, lat: Number(s.lat), lng: Number(s.lng), name: s.name })),
-    ...rallyPoints.map((r) => ({
-      id: RALLY_POINT_CANDIDATE_ID_OFFSET + r.id,
-      lat: Number(r.lat),
-      lng: Number(r.lng),
-      name: r.name,
-    })),
-  ];
-}
+// Re-exported for existing importers (moved to matching/executeMatching.ts).
+export { getMatchingStopCandidates, RALLY_POINT_CANDIDATE_ID_OFFSET };
 
 export const appRouter = router({
   system: systemRouter,
@@ -1165,11 +1111,20 @@ export const appRouter = router({
         .mutation(async ({ input, ctx }) => {
           const event = await getEventById(input.eventId);
           if (!event) throw new TRPCError({ code: "NOT_FOUND" });
-          if (event.matchingFrozenAt) {
-            throw new TRPCError({ code: "BAD_REQUEST", message: "이미 동결된 이벤트는 재계산할 수 없습니다." });
-          }
           if (!event.lat || !event.lng) {
             throw new TRPCError({ code: "BAD_REQUEST", message: "이벤트에 좌표(장소)가 설정되어 있지 않습니다." });
+          }
+
+          // A frozen event is normally final. The one exception: the D-7
+          // auto-freeze preempted it but its matching then failed, leaving the
+          // event frozen with no pipeline trips — admin can resume with a
+          // manual commit. Once pipeline trips exist, no more recompute.
+          if (event.matchingFrozenAt) {
+            const existingTrips = await getTripsByEventId(input.eventId);
+            const hasPipelineTrips = existingTrips.some((t) => t.sourceClusterId != null);
+            if (hasPipelineTrips) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: "이미 동결·확정된 이벤트는 재계산할 수 없습니다." });
+            }
           }
 
           const capPricePerSeat = event.autoMatchPricePerSeat ?? 0;
@@ -1179,195 +1134,23 @@ export const appRouter = router({
               message: `최종 가격은 상한가(${capPricePerSeat}원) 이하여야 합니다.`,
             });
           }
-          const finalPricePerSeat = input.finalPricePerSeat ?? capPricePerSeat;
 
-          const resolvedParams = resolvePipelineParams(input.params);
-
-          // Clear prior non-frozen pipeline output for this event so recompute
-          // is idempotent: any trip this pipeline previously created (marked by
-          // a non-null sourceClusterId) that never progressed past "collecting"
-          // is safe to delete and rebuild.
-          const existingTrips = await getTripsByEventId(input.eventId);
-          for (const trip of existingTrips) {
-            if (trip.sourceClusterId != null && trip.status === "collecting") {
-              // Reset any requests already matched into this trip (they reach
-              // "route_confirmed" within a single commit call, so they must be
-              // explicitly pulled back into the pending pool here, not just the
-              // narrower "clustered" case clearRideRequestClusterAssignments covers).
-              await clearRideRequestsByTripId(trip.id);
-              await deleteReservationsByTripId(trip.id);
-              await deleteBoardingPointsByTripId(trip.id);
-              await deleteTrip(trip.id);
-            }
-          }
-          await clearRideRequestClusterAssignments(input.eventId);
-          await deleteClustersByEventId(input.eventId);
-
-          const [pendingRequests, stopCandidatesForPipeline] = await Promise.all([
-            getPendingRideRequestsByEventId(input.eventId),
-            getMatchingStopCandidates(),
-          ]);
-          const stopNameById = new Map(stopCandidatesForPipeline.map((s) => [s.id, s.name]));
-          const requestById = new Map(pendingRequests.map((r) => [r.id, r]));
-
-          const output = runMatchingPipeline({
-            eventId: input.eventId,
-            venue: { lat: Number(event.lat), lng: Number(event.lng) },
-            requests: pendingRequests.map((r) => ({
-              id: r.id,
-              lat: Number(r.originLat),
-              lng: Number(r.originLng),
-              targetArrivalAt: r.targetArrivalAt,
-              seats: r.seats,
-            })),
-            stopCandidates: stopCandidatesForPipeline,
-            params: resolvedParams,
-          });
-
-          // Persist clusters, tracking pipeline-internal clusterId -> DB row id
-          // and -> PipelineClusterResult so route stops (which carry the
-          // pipeline-internal clusterId) can be resolved back to both.
-          const dbClusterIdByPipelineClusterId = new Map<number, number>();
-          const clusterResultByPipelineClusterId = new Map(
-            output.clusters.map((c) => [c.clusterId, c])
-          );
-
-          for (const cluster of output.clusters) {
-            const dbClusterId = await createCluster({
+          try {
+            const { output, createdTripCount, matchedRequestCount } = await executeMatching({
               eventId: input.eventId,
-              groupKey: cluster.groupKey,
-              status: cluster.status,
-              assignedStopId: cluster.assignedStopId,
-              assignedLat: String(cluster.assignedLat),
-              assignedLng: String(cluster.assignedLng),
-              isAdHocStop: cluster.isAdHocStop,
-              size: cluster.memberRequestIds.length,
-            });
-            dbClusterIdByPipelineClusterId.set(cluster.clusterId, dbClusterId);
-            if (cluster.status !== "failed") {
-              await assignRideRequestsToCluster(cluster.memberRequestIds, dbClusterId);
-            }
-          }
-
-          let createdTripCount = 0;
-          let matchedRequestCount = 0;
-
-          for (const route of output.routes) {
-            const firstStop = route.stops[0];
-            const sourceClusterId = firstStop
-              ? dbClusterIdByPipelineClusterId.get(firstStop.clusterId) ?? null
-              : null;
-
-            const tripId = await createTrip({
-              eventId: input.eventId,
-              mode: "bus",
-              status: "collecting",
-              minCount: resolvedParams.minCapacitySeats,
-              maxCount: resolvedParams.maxCapacitySeats,
-              price: finalPricePerSeat,
-              departureAt: route.departureAt,
-              isRoundTrip: false,
               creatorId: ctx.user.id,
-              sourceClusterId,
+              params: input.params,
+              finalPricePerSeat: input.finalPricePerSeat,
             });
-
-            for (const stop of route.stops) {
-              const clusterResult = clusterResultByPipelineClusterId.get(stop.clusterId);
-              const dbClusterId = dbClusterIdByPipelineClusterId.get(stop.clusterId) ?? null;
-
-              const stopName = clusterResult?.assignedStopId
-                ? stopNameById.get(clusterResult.assignedStopId) ?? "정류장"
-                : "임시 정류장";
-
-              const boardingPointId = await createBoardingPoint({
-                tripId,
-                name: stopName,
-                lat: String(stop.lat),
-                lng: String(stop.lng),
-                pickupTime: stop.pickupTime,
-                order: stop.order,
-              });
-
-              if (dbClusterId !== null) {
-                await updateCluster(dbClusterId, { tripId });
-              }
-
-              const memberIds = clusterResult?.memberRequestIds ?? [];
-              for (const requestId of memberIds) {
-                const request = requestById.get(requestId);
-                if (!request) continue;
-
-                const reservationId = await createReservation({
-                  userId: request.userId,
-                  tripId,
-                  boardingPointId,
-                  seats: request.seats,
-                  pointsUsed: 0,
-                  passengerName: request.passengerName ?? undefined,
-                  passengerPhone: request.passengerPhone ?? undefined,
-                  passengerEmail: request.passengerEmail ?? undefined,
-                  referralCode: request.referralCodeUsed ?? undefined,
-                });
-
-                // 토스 선결제 신청은 신청 시점 결제를 예약에 연결하고 상한가
-                // 대비 차액을 부분취소로 환불한다. 환불 실패는 커밋 전체를
-                // 막지 않고 기록 + 운영자 통보 후 계속 진행.
-                const existingPayment = await getLatestPaymentByRideRequestId(request.id);
-                if (existingPayment && existingPayment.method === "toss" && existingPayment.status === "paid") {
-                  await updatePaymentStatus(existingPayment.id, "paid", { reservationId });
-                  try {
-                    await applyRideRequestDifferenceRefund(existingPayment, {
-                      userId: request.userId,
-                      requestId: request.id,
-                      seats: request.seats,
-                      capPricePerSeat,
-                      finalPricePerSeat,
-                    });
-                  } catch (error) {
-                    console.error(
-                      `[admin.matching.commit] difference refund failed for request ${request.id} (payment ${existingPayment.id}):`,
-                      error
-                    );
-                    await notifyOwner({
-                      title: "[번개GO] 차액 환불 실패 - 수동 처리 필요",
-                      content: `신청 #${request.id} / payment #${existingPayment.id}: 상한가 ${capPricePerSeat}원 → 확정가 ${finalPricePerSeat}원 차액 환불에 실패했습니다.`,
-                    }).catch(() => false);
-                  }
-                } else {
-                  // mock 신청: 확정가 기준 결제 기록 생성 (finalPricePerSeat
-                  // 미입력 시 상한가 그대로 = 기존 동작).
-                  await createPaymentWithItems({
-                    reservationId,
-                    method: "mock",
-                    chargeType: "prepaid",
-                    items: [
-                      {
-                        type: "fare",
-                        amount: Math.max(0, finalPricePerSeat * request.seats - request.pointsUsed),
-                        label: "셔틀 요금",
-                      },
-                    ],
-                  });
-                }
-
-                await notifyTrip(
-                  tripId,
-                  "reservationConfirmed",
-                  { passengerName: request.passengerName ?? "고객", seats: request.seats, departureAt: route.departureAt },
-                  [request.userId]
-                ).catch((error) => console.warn("[admin.matching.commit] notifyTrip failed:", error));
-
-                await incrementTripCount(tripId, request.seats);
-                await maybeConfirmTrip(tripId);
-                await finalizeRideRequestRoute(requestId, { tripId, boardingPointId, reservationId });
-                matchedRequestCount++;
-              }
+            // Spread the pipeline output so the admin UI renders the same
+            // cluster/route preview it showed before committing.
+            return { ...output, createdTripCount, matchedRequestCount };
+          } catch (error) {
+            if (error instanceof MatchingError) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
             }
-
-            createdTripCount++;
+            throw error;
           }
-
-          return { ...output, createdTripCount, matchedRequestCount };
         }),
 
       freeze: adminProcedure
@@ -1379,56 +1162,21 @@ export const appRouter = router({
             throw new TRPCError({ code: "BAD_REQUEST", message: "이미 동결된 이벤트입니다." });
           }
 
-          const allRequests = await getRideRequestsByEventId(input.eventId);
-          const unmatched = allRequests.filter(
-            (r) => r.status === "pending" || r.status === "clustered"
+          // Refund every still-unmatched request, then mark the event frozen
+          // (shared with the D-7 auto scheduler via refundUnmatchedRideRequests).
+          const { refundedCount, refundFailures } = await refundUnmatchedRideRequests(
+            input.eventId,
+            "배차 동결 미매칭 환불"
           );
 
-          // 미매칭 신청 환불: 토스 선결제는 남은 금액 전액 취소. 개별
-          // try-catch로 한 건의 실패가 나머지를 막지 않으며, 환불에 실패한
-          // 신청은 상태를 바꾸지 않고(돈이 안 돌아갔으므로 refunded로 표시
-          // 금지) 운영자 통보 대상으로 남긴다.
-          let refundFailures = 0;
-          for (const req of unmatched) {
-            const payment = await getLatestPaymentByRideRequestId(req.id);
-            if (payment && payment.status === "paid") {
-              const remaining = payment.totalAmount - payment.refundedAmount;
-              try {
-                await refundTossPaymentIfNeeded(payment, remaining, "배차 동결 미매칭 전액 환불");
-                await updatePaymentStatus(payment.id, "cancelled", {
-                  cancelledAt: new Date(),
-                  cancelReason: "trip_not_confirmed",
-                  cancelNote: `배차 동결 미매칭 환불 (환불액 ${remaining}원)`,
-                  refundedAmount: payment.totalAmount,
-                });
-              } catch (error) {
-                refundFailures++;
-                console.error(`[admin.matching.freeze] toss refund failed for request ${req.id} (payment ${payment.id}):`, error);
-                try {
-                  await updatePaymentStatus(payment.id, "paid", {
-                    cancelNote: `동결 미매칭 환불 실패 - 수동 재시도 필요 (환불 예정액 ${remaining}원)`,
-                  });
-                } catch (noteError) {
-                  console.error("[admin.matching.freeze] failed to record refund failure:", noteError);
-                }
-                continue;
-              }
-            }
-
-            await updateRideRequestStatus(req.id, "failed_refunded", { refundedAt: new Date() });
-            if (req.pointsUsed > 0) {
-              await addPoints(req.userId, req.pointsUsed, "refund", "배차 동결 미매칭 환불", String(req.id));
-            }
-          }
-
-          await updateEvent(input.eventId, { matchingFrozenAt: new Date() });
+          await updateEvent(input.eventId, { matchingFrozenAt: new Date(), matchingFrozenBy: "admin" });
 
           await notifyOwner({
             title: `[번개GO] ${event.title} 배차 동결 완료`,
-            content: `동결 시점 미매칭 ${unmatched.length}건 환불 처리되었습니다.${refundFailures > 0 ? ` (토스 환불 실패 ${refundFailures}건 - 수동 처리 필요)` : ""}`,
+            content: `동결 시점 미매칭 ${refundedCount}건 환불 처리되었습니다.${refundFailures > 0 ? ` (토스 환불 실패 ${refundFailures}건 - 수동 처리 필요)` : ""}`,
           }).catch(() => false);
 
-          return { success: true, refundedCount: unmatched.length - refundFailures, refundFailures };
+          return { success: true, refundedCount, refundFailures };
         }),
     }),
   }),

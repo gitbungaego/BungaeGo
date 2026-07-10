@@ -1,12 +1,15 @@
-import { Payment, PaymentCancelReason, PaymentItem, PaymentItemType, Trip } from "../drizzle/schema";
+import { Payment, PaymentCancelReason, PaymentItem, PaymentItemType, RideRequest, Trip } from "../drizzle/schema";
 import { evaluateCancellation } from "@shared/cancellationPolicy";
 import {
   addPoints,
   createPaymentWithItems,
   getLatestPaymentByReservationId,
+  getLatestPaymentByRideRequestId,
   getPaymentItemsByPaymentId,
   getReservationsByTripId,
+  getRideRequestsByEventId,
   updatePaymentStatus,
+  updateRideRequestStatus,
 } from "./db";
 import { cancelTossPayment } from "./toss";
 
@@ -161,6 +164,68 @@ export async function applyRideRequestDifferenceRefund(
     refundedAmount: payment.refundedAmount + delta,
     cancelNote: `차액 환불 누적 ${payment.refundedAmount + delta}원 (확정가 ${opts.finalPricePerSeat}원/석)`,
   });
+}
+
+// ─── Unmatched ride-request refund (freeze / auto-freeze) ─────────────────────
+export interface UnmatchedRefundResult {
+  refundedCount: number;
+  refundFailures: number;
+}
+
+/**
+ * Refunds every still-unmatched (pending/clustered) ride request for an event
+ * and marks it failed_refunded. Shared by the manual freeze procedure and the
+ * D-7 auto-freeze scheduler, so both handle noise/failed-cluster riders and
+ * never-clustered riders identically.
+ *
+ * Toss prepayments get their remaining balance cancelled in full; a failed
+ * Toss cancel leaves that request/payment untouched (retriable) rather than
+ * marking it refunded, and is counted in refundFailures. Points are refunded
+ * via the internal ledger regardless of payment method.
+ */
+export async function refundUnmatchedRideRequests(
+  eventId: number,
+  cancelNoteLabel = "배차 동결 미매칭 환불"
+): Promise<UnmatchedRefundResult> {
+  const allRequests = await getRideRequestsByEventId(eventId);
+  const unmatched = allRequests.filter(
+    (r: RideRequest) => r.status === "pending" || r.status === "clustered"
+  );
+
+  let refundFailures = 0;
+  for (const req of unmatched) {
+    const payment = await getLatestPaymentByRideRequestId(req.id);
+    if (payment && payment.status === "paid") {
+      const remaining = payment.totalAmount - payment.refundedAmount;
+      try {
+        await refundTossPaymentIfNeeded(payment, remaining, cancelNoteLabel);
+        await updatePaymentStatus(payment.id, "cancelled", {
+          cancelledAt: new Date(),
+          cancelReason: "trip_not_confirmed",
+          cancelNote: `${cancelNoteLabel} (환불액 ${remaining}원)`,
+          refundedAmount: payment.totalAmount,
+        });
+      } catch (error) {
+        refundFailures++;
+        console.error(`[refundUnmatchedRideRequests] toss refund failed for request ${req.id} (payment ${payment.id}):`, error);
+        try {
+          await updatePaymentStatus(payment.id, "paid", {
+            cancelNote: `${cancelNoteLabel} 실패 - 수동 재시도 필요 (환불 예정액 ${remaining}원)`,
+          });
+        } catch (noteError) {
+          console.error("[refundUnmatchedRideRequests] failed to record refund failure:", noteError);
+        }
+        continue; // leave request untouched (retriable), keep processing others
+      }
+    }
+
+    await updateRideRequestStatus(req.id, "failed_refunded", { refundedAt: new Date() });
+    if (req.pointsUsed > 0) {
+      await addPoints(req.userId, req.pointsUsed, "refund", cancelNoteLabel, String(req.id));
+    }
+  }
+
+  return { refundedCount: unmatched.length - refundFailures, refundFailures };
 }
 
 // ─── Trip cancellation cascade ────────────────────────────────────────────────

@@ -85,6 +85,13 @@
       "when": 1783689858527,
       "tag": "0011_solid_molten_man",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1783709385752,
+      "tag": "0012_curved_jimmy_woo",
+      "breakpoints": true
     }
   ]
 }
