@@ -159,23 +159,24 @@ export function searchKeyword(keyword: string): Promise<KakaoPlaceResult[]> {
 }
 
 /** Marker with a custom-colored dot, for cluster/route visualization. */
-export function createDotMarker(map: any, position: MapLatLng, color: string, title?: string) {
+export function createDotMarker(map: any, position: MapLatLng, color: string, title?: string, onClick?: () => void) {
   const { kakao } = window;
-  const content = document.createElement("div");
-  content.style.width = "14px";
-  content.style.height = "14px";
-  content.style.borderRadius = "50%";
-  content.style.background = color;
-  content.style.border = "2px solid white";
-  content.style.boxShadow = "0 0 2px rgba(0,0,0,0.4)";
-  if (title) content.title = title;
-
-  return new kakao.maps.CustomOverlay({
+  const svg = encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><circle cx="11" cy="11" r="8" fill="${color}" stroke="white" stroke-width="3"/><circle cx="11" cy="11" r="10" fill="none" stroke="rgba(17,24,39,0.18)" stroke-width="1"/></svg>`
+  );
+  const image = new kakao.maps.MarkerImage(
+    `data:image/svg+xml;charset=UTF-8,${svg}`,
+    new kakao.maps.Size(22, 22),
+    { offset: new kakao.maps.Point(11, 11) }
+  );
+  const marker = new kakao.maps.Marker({
     map,
     position: new kakao.maps.LatLng(position.lat, position.lng),
-    content,
-    yAnchor: 0.5,
+    title,
+    image,
   });
+  if (onClick) kakao.maps.event.addListener(marker, "click", onClick);
+  return marker;
 }
 
 export interface BoardingPointMarkerOptions {
@@ -198,30 +199,25 @@ const BOARDING_POINT_COLOR = "#FEE500";
 export function createBoardingPointMarker(map: any, position: MapLatLng, options: BoardingPointMarkerOptions = {}) {
   const { label, muted = false, title, onClick } = options;
   const { kakao } = window;
-  const content = document.createElement("div");
-  content.style.display = "flex";
-  content.style.alignItems = "center";
-  content.style.justifyContent = "center";
-  content.style.width = "26px";
-  content.style.height = "26px";
-  content.style.borderRadius = "50%";
-  content.style.fontSize = "11px";
-  content.style.fontWeight = "700";
-  content.style.color = muted ? "#4b5563" : "#111827";
-  content.style.background = muted ? "rgba(156,163,175,0.65)" : BOARDING_POINT_COLOR;
-  content.style.border = muted ? "1px solid rgba(107,114,128,0.5)" : "2px solid white";
-  content.style.boxShadow = "0 1px 4px rgba(0,0,0,0.3)";
-  content.style.cursor = onClick ? "pointer" : "default";
-  content.textContent = label ?? "";
-  if (title) content.title = title;
-  if (onClick) content.addEventListener("click", onClick);
-
-  return new kakao.maps.CustomOverlay({
+  const fill = muted ? "rgba(156,163,175,0.75)" : BOARDING_POINT_COLOR;
+  const textColor = muted ? "#4b5563" : "#111827";
+  const text = label ? `<text x="15" y="19" text-anchor="middle" font-size="12" font-weight="700" fill="${textColor}" font-family="Arial, sans-serif">${label}</text>` : "";
+  const svg = encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30"><circle cx="15" cy="15" r="12" fill="${fill}" stroke="white" stroke-width="3"/><circle cx="15" cy="15" r="14" fill="none" stroke="rgba(17,24,39,0.22)" stroke-width="1"/>${text}</svg>`
+  );
+  const image = new kakao.maps.MarkerImage(
+    `data:image/svg+xml;charset=UTF-8,${svg}`,
+    new kakao.maps.Size(30, 30),
+    { offset: new kakao.maps.Point(15, 15) }
+  );
+  const marker = new kakao.maps.Marker({
     map,
     position: new kakao.maps.LatLng(position.lat, position.lng),
-    content,
-    yAnchor: 0.5,
+    title,
+    image,
   });
+  if (onClick) kakao.maps.event.addListener(marker, "click", onClick);
+  return marker;
 }
 
 // Same brand yellow as boarding points - demand is "riders who would use a

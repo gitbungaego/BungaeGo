@@ -1,7 +1,7 @@
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -25,14 +25,31 @@ const STEPS = [
   { id: 4, label: "결제" },
 ];
 
+// A rally point candidate tapped on the event map arrives here with its
+// coordinates in the query string, so step 1 starts pre-filled.
+function readPrefilledOrigin(): { lat: number; lng: number; address: string } | null {
+  const params = new URLSearchParams(window.location.search);
+  const rawLat = params.get("originLat");
+  const rawLng = params.get("originLng");
+  if (!rawLat || !rawLng) return null;
+  const lat = Number(rawLat);
+  const lng = Number(rawLng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng, address: params.get("originAddress") ?? "" };
+}
+
 export default function RequestJoinPage({ eventId }: Props) {
   const { user, isAuthenticated } = useAuth();
   const [, navigate] = useLocation();
   const [step, setStep] = useState(1);
 
-  const [originAddress, setOriginAddress] = useState("");
-  const [originLat, setOriginLat] = useState<number | null>(null);
-  const [originLng, setOriginLng] = useState<number | null>(null);
+  const [prefilledOrigin] = useState(readPrefilledOrigin);
+  const [originAddress, setOriginAddress] = useState(prefilledOrigin?.address ?? "");
+  const [originLat, setOriginLat] = useState<number | null>(prefilledOrigin?.lat ?? null);
+  const [originLng, setOriginLng] = useState<number | null>(prefilledOrigin?.lng ?? null);
+  // Address the user has already confirmed (prefilled or picked from the
+  // dropdown) - typing it back shouldn't reopen the search dropdown.
+  const committedAddressRef = useRef(prefilledOrigin?.address ?? "");
   const [map, setMap] = useState<any>(null);
   const [marker, setMarker] = useState<any>(null);
   const [placeResults, setPlaceResults] = useState<KakaoPlaceResult[]>([]);
@@ -58,6 +75,51 @@ export default function RequestJoinPage({ eventId }: Props) {
     },
     onError: (err) => toast.error(err.message || "참가 신청에 실패했습니다."),
   });
+
+  // Debounced keyword search-as-you-type (Kakao has no plug-and-play
+  // autocomplete widget, so we build a simple dropdown).
+  useEffect(() => {
+    if (!originAddress.trim() || originAddress === committedAddressRef.current) {
+      setPlaceResults([]);
+      setShowPlaceDropdown(false);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      const results = await searchKeyword(originAddress);
+      setPlaceResults(results);
+      setShowPlaceDropdown(true);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [originAddress]);
+
+  const selectPlace = (place: KakaoPlaceResult) => {
+    const lat = Number(place.y);
+    const lng = Number(place.x);
+    const address = place.road_address_name || place.address_name || place.place_name;
+    committedAddressRef.current = address;
+    setOriginAddress(address);
+    setOriginLat(lat);
+    setOriginLng(lng);
+    setShowPlaceDropdown(false);
+
+    if (map && window.kakao) {
+      const position = new window.kakao.maps.LatLng(lat, lng);
+      map.setCenter(position);
+      map.setLevel(3);
+      if (marker) marker.setMap(null);
+      setMarker(new window.kakao.maps.Marker({ map, position }));
+    }
+  };
+
+  // Drop the marker for a pre-filled origin once the map is ready (selectPlace
+  // handles the marker itself for dropdown picks).
+  useEffect(() => {
+    if (!map || !window.kakao || marker || originLat === null || originLng === null) return;
+    const position = new window.kakao.maps.LatLng(originLat, originLng);
+    map.setCenter(position);
+    map.setLevel(3);
+    setMarker(new window.kakao.maps.Marker({ map, position }));
+  }, [map, marker, originLat, originLng]);
 
   if (!isAuthenticated) {
     return (
@@ -95,38 +157,6 @@ export default function RequestJoinPage({ eventId }: Props) {
   const totalBeforePoints = pricePerSeat * seats;
   const maxPointsUsable = Math.min(pointsBalance?.balance ?? 0, totalBeforePoints);
   const totalAmount = totalBeforePoints - pointsUsed;
-
-  // Debounced keyword search-as-you-type (Kakao has no plug-and-play
-  // autocomplete widget, so we build a simple dropdown).
-  useEffect(() => {
-    if (!originAddress.trim()) {
-      setPlaceResults([]);
-      return;
-    }
-    const timer = setTimeout(async () => {
-      const results = await searchKeyword(originAddress);
-      setPlaceResults(results);
-      setShowPlaceDropdown(true);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [originAddress]);
-
-  const selectPlace = (place: KakaoPlaceResult) => {
-    const lat = Number(place.y);
-    const lng = Number(place.x);
-    setOriginAddress(place.road_address_name || place.address_name || place.place_name);
-    setOriginLat(lat);
-    setOriginLng(lng);
-    setShowPlaceDropdown(false);
-
-    if (map && window.kakao) {
-      const position = new window.kakao.maps.LatLng(lat, lng);
-      map.setCenter(position);
-      map.setLevel(3);
-      if (marker) marker.setMap(null);
-      setMarker(new window.kakao.maps.Marker({ map, position }));
-    }
-  };
 
   const targetArrivalMs = () => {
     if (!targetArrivalDate || !targetArrivalTime) return null;

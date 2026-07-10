@@ -15,7 +15,8 @@ import {
 } from "@/lib/constants";
 import { ArrowLeft, Bus, Calendar, Clock, MapPin, Users } from "lucide-react";
 import { Link, useLocation } from "wouter";
-import { MapView, createBoardingPointMarker, createDemandCircle, createDotMarker, createTooltipOverlay } from "@/components/Map";
+import { MapView, createBoardingPointMarker, createDemandCircle, createDotMarker } from "@/components/Map";
+import { MapPointSheet, type MapPointSelection } from "@/components/MapPointSheet";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 interface Props {
@@ -37,6 +38,20 @@ function demandRadiusMeters(count: number): number {
 // read as their own category rather than blending into either.
 const CANDIDATE_CONFIRMED_COLOR = "#0284C7";
 const CANDIDATE_UNCONFIRMED_COLOR = "#BAE6FD";
+const NEARBY_DEMAND_RADIUS_METERS = 1500;
+
+function distanceMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const radius = 6371000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return radius * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
 
 export default function EventDetailPage({ id }: Props) {
   const [, navigate] = useLocation();
@@ -54,12 +69,16 @@ export default function EventDetailPage({ id }: Props) {
 
   const [selectedTripId, setSelectedTripId] = useState<number | null>(null);
   const [map, setMap] = useState<any>(null);
-  const [highlightedTripId, setHighlightedTripId] = useState<number | null>(null);
+  const [selectedMapPoint, setSelectedMapPoint] = useState<MapPointSelection | null>(null);
   const markersRef = useRef<any[]>([]);
   const demandMarkersRef = useRef<any[]>([]);
-  const demandTooltipRef = useRef<any>(null);
   const candidateMarkersRef = useRef<any[]>([]);
-  const tripCardRefs = useRef<Record<number, HTMLDivElement | null>>({});
+
+  const { data: selectedBoardingDetail, isLoading: selectedBoardingLoading } =
+    trpc.boardingPoints.detailById.useQuery(
+      { boardingPointId: selectedMapPoint?.type === "boarding" ? selectedMapPoint.boardingPointId : 0 },
+      { enabled: selectedMapPoint?.type === "boarding" }
+    );
 
   const selectedTrip = trips?.find((t) => t.id === selectedTripId) ?? trips?.[0];
 
@@ -68,24 +87,28 @@ export default function EventDetailPage({ id }: Props) {
     [allBoardingPoints, selectedTrip?.id]
   );
 
+  const nearbyDemandFor = useCallback(
+    (position: { lat: number; lng: number }) =>
+      (demandCells ?? []).reduce(
+        (summary, cell) => {
+          if (distanceMeters(position, { lat: cell.lat, lng: cell.lng }) > NEARBY_DEMAND_RADIUS_METERS) {
+            return summary;
+          }
+          return { count: summary.count + cell.count, seats: summary.seats + cell.seats };
+        },
+        { count: 0, seats: 0 }
+      ),
+    [demandCells]
+  );
+
   const handleMapReady = useCallback((m: any) => {
     setMap(m);
   }, []);
 
-  // Selecting a trip via its map marker also brings the matching shuttle
-  // card into view with a brief highlight, so the click has a visible result
-  // even when the card is scrolled out of the viewport.
-  const selectTripFromMarker = useCallback((tripId: number) => {
+  const selectBoardingPointFromMarker = useCallback((boardingPointId: number, tripId: number) => {
     setSelectedTripId(tripId);
-    tripCardRefs.current[tripId]?.scrollIntoView({ behavior: "smooth", block: "center" });
-    setHighlightedTripId(tripId);
+    setSelectedMapPoint({ type: "boarding", boardingPointId });
   }, []);
-
-  useEffect(() => {
-    if (highlightedTripId === null) return;
-    const timer = setTimeout(() => setHighlightedTripId(null), 1600);
-    return () => clearTimeout(timer);
-  }, [highlightedTripId]);
 
   // Event-wide rally-point layer: the venue plus every trip's boarding
   // points, re-rendered whenever the map instance, the point list, or the
@@ -127,7 +150,7 @@ export default function EventDetailPage({ id }: Props) {
           label: orderIndex ? String(orderIndex) : undefined,
           muted: !isSelected,
           title: bp.name,
-          onClick: () => selectTripFromMarker(bp.tripId),
+          onClick: () => selectBoardingPointFromMarker(bp.id, bp.tripId),
         }
       );
       markersRef.current.push(marker);
@@ -138,7 +161,7 @@ export default function EventDetailPage({ id }: Props) {
     if (hasBounds) {
       map.setBounds(bounds);
     }
-  }, [map, allBoardingPoints, selectedTrip?.id, selectedTripPoints, event, selectTripFromMarker]);
+  }, [map, allBoardingPoints, selectedTrip?.id, selectedTripPoints, event, selectBoardingPointFromMarker]);
 
   // Demand layer: one translucent circle per grid cell, radius scaled by
   // rider count. Always shown alongside the rally-point layer above when the
@@ -148,9 +171,6 @@ export default function EventDetailPage({ id }: Props) {
 
     demandMarkersRef.current.forEach((circle) => circle.setMap(null));
     demandMarkersRef.current = [];
-    demandTooltipRef.current?.setMap(null);
-    demandTooltipRef.current = null;
-
     (demandCells ?? []).forEach((cell) => {
       const circle = createDemandCircle(
         map,
@@ -158,12 +178,13 @@ export default function EventDetailPage({ id }: Props) {
         {
           radiusMeters: demandRadiusMeters(cell.count),
           onClick: () => {
-            demandTooltipRef.current?.setMap(null);
-            demandTooltipRef.current = createTooltipOverlay(
-              map,
-              { lat: cell.lat, lng: cell.lng },
-              `이 근처 ${cell.count}명이 출발을 원하고 있어요`
-            );
+            setSelectedMapPoint({
+              type: "demand",
+              lat: cell.lat,
+              lng: cell.lng,
+              count: cell.count,
+              seats: cell.seats,
+            });
           },
         }
       );
@@ -176,22 +197,39 @@ export default function EventDetailPage({ id }: Props) {
   // ones are ever offered to the matching pipeline as snap targets - this
   // layer shows both so unconfirmed suggestions stay visible on the map.
   useEffect(() => {
-    if (!map || !window.kakao) return;
+    if (!map || !window.kakao || !event) return;
 
     candidateMarkersRef.current.forEach((marker) => marker.setMap(null));
     candidateMarkersRef.current = [];
 
     (rallyPointCandidates ?? []).forEach((candidate) => {
       const confirmed = candidate.busAccessible;
+      const lat = Number(candidate.lat);
+      const lng = Number(candidate.lng);
       const marker = createDotMarker(
         map,
-        { lat: Number(candidate.lat), lng: Number(candidate.lng) },
+        { lat, lng },
         confirmed ? CANDIDATE_CONFIRMED_COLOR : CANDIDATE_UNCONFIRMED_COLOR,
-        `${candidate.name} · ${confirmed ? "정차 확인됨" : "정차 확인 중"}`
+        `${candidate.name} · ${confirmed ? "정차 확인됨" : "정차 확인 중"}`,
+        () => {
+          setSelectedMapPoint({
+            type: "candidate",
+            id: candidate.id,
+            eventId: event.id,
+            name: candidate.name,
+            region: candidate.region,
+            lat,
+            lng,
+            busAccessible: candidate.busAccessible,
+            notes: candidate.notes,
+            nearbyDemand: nearbyDemandFor({ lat, lng }),
+            autoMatchEnabled: !!event.autoMatchEnabled && !event.matchingFrozenAt,
+          });
+        }
       );
       candidateMarkersRef.current.push(marker);
     });
-  }, [map, rallyPointCandidates]);
+  }, [map, rallyPointCandidates, event, nearbyDemandFor]);
 
   // Belt-and-suspenders cleanup on unmount (each effect above already clears
   // its own markers at the start of every re-run).
@@ -199,7 +237,6 @@ export default function EventDetailPage({ id }: Props) {
     return () => {
       markersRef.current.forEach((marker) => marker.setMap(null));
       demandMarkersRef.current.forEach((circle) => circle.setMap(null));
-      demandTooltipRef.current?.setMap(null);
       candidateMarkersRef.current.forEach((marker) => marker.setMap(null));
     };
   }, []);
@@ -320,7 +357,7 @@ export default function EventDetailPage({ id }: Props) {
           <div className="lg:col-span-3 space-y-4 lg:sticky lg:top-20 lg:self-start">
             <h2 className="text-lg font-semibold">탑승 포인트</h2>
 
-            <div className="relative rounded-xl overflow-hidden border border-border h-[40vh] lg:h-auto lg:min-h-[400px]">
+            <div className="relative rounded-xl overflow-hidden border border-border h-[40vh] lg:h-[480px]">
               <MapView
                 className="h-full"
                 onMapReady={handleMapReady}
@@ -359,6 +396,16 @@ export default function EventDetailPage({ id }: Props) {
                 </div>
               )}
             </div>
+
+            <MapPointSheet
+              open={!!selectedMapPoint}
+              onOpenChange={(open) => {
+                if (!open) setSelectedMapPoint(null);
+              }}
+              selection={selectedMapPoint}
+              boardingDetail={selectedBoardingDetail}
+              boardingLoading={selectedBoardingLoading}
+            />
 
             {selectedTripPoints.length > 0 ? (
               <div className="space-y-2">
@@ -405,18 +452,16 @@ export default function EventDetailPage({ id }: Props) {
                   const isConfirmed = trip.status === "confirmed";
                   const isFull = trip.availability.remaining <= 0;
                   const isSelected = selectedTrip?.id === trip.id;
-                  const isHighlighted = highlightedTripId === trip.id;
 
                   return (
                     <div
                       key={trip.id}
-                      ref={(el) => { tripCardRefs.current[trip.id] = el; }}
                       onClick={() => setSelectedTripId(trip.id)}
                       className={`rounded-xl border p-4 cursor-pointer transition-all duration-200 ${
                         isSelected
                           ? "border-primary bg-primary/5 shadow-sm"
                           : "border-border bg-card hover:border-primary/40 hover:shadow-sm"
-                      } ${isHighlighted ? "ring-2 ring-primary ring-offset-2" : ""}`}
+                      }`}
                     >
                       <div className="flex items-start justify-between gap-3 mb-3">
                         <div className="flex items-center gap-2 flex-wrap">
