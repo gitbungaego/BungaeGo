@@ -433,6 +433,7 @@ export async function reserveSeatsWithLock<T>(
       : [];
     const latestPaymentByReservationId = new Map<number, Payment>();
     for (const payment of paymentRows) {
+      if (payment.reservationId === null) continue;
       const existing = latestPaymentByReservationId.get(payment.reservationId);
       if (!existing || payment.id > existing.id) {
         latestPaymentByReservationId.set(payment.reservationId, payment);
@@ -627,21 +628,30 @@ export async function deleteReservationsByTripId(tripId: number): Promise<void> 
 
 // ─── Payments ─────────────────────────────────────────────────────────────────
 export async function createPaymentWithItems(data: {
-  reservationId: number;
+  // Null for a Toss pending order: the reservation doesn't exist yet and is
+  // linked after approval.
+  reservationId: number | null;
   method: PaymentMethod;
   chargeType: ChargeType;
   items: { type: PaymentItemType; amount: number; label: string }[];
+  // Defaults to the legacy behavior (immediately-paid mock payment).
+  status?: "pending" | "paid";
+  orderId?: string;
+  orderContext?: unknown;
 }): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
+  const status = data.status ?? "paid";
   const totalAmount = data.items.reduce((sum, item) => sum + item.amount, 0);
   const result = await db.insert(payments).values({
     reservationId: data.reservationId,
     totalAmount,
-    status: "paid",
+    status,
     method: data.method,
     chargeType: data.chargeType,
-    paidAt: new Date(),
+    orderId: data.orderId,
+    orderContext: data.orderContext,
+    paidAt: status === "paid" ? new Date() : null,
   });
   const paymentId = (result[0] as any).insertId;
   if (data.items.length > 0) {
@@ -655,6 +665,13 @@ export async function createPaymentWithItems(data: {
     );
   }
   return paymentId;
+}
+
+export async function getPaymentByOrderId(orderId: string): Promise<Payment | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(payments).where(eq(payments.orderId, orderId)).limit(1);
+  return result[0];
 }
 
 export async function getLatestPaymentByReservationId(reservationId: number): Promise<Payment | undefined> {
@@ -678,6 +695,7 @@ export async function getLatestPaymentsByReservationIds(
   if (!db) return map;
   const rows = await db.select().from(payments).where(inArray(payments.reservationId, reservationIds));
   for (const row of rows) {
+    if (row.reservationId === null) continue;
     const existing = map.get(row.reservationId);
     if (!existing || row.id > existing.id) {
       map.set(row.reservationId, row);

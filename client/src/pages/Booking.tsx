@@ -2,7 +2,7 @@ import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
 import { isCreatedAfterOwnD5 } from "@shared/cancellationPolicy";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,8 @@ import {
 } from "@/lib/constants";
 import { ArrowLeft, ArrowRight, Bus, CheckCircle2, Clock, MapPin, Minus, Plus, User } from "lucide-react";
 import { Link } from "wouter";
+import { isTossConfigured } from "@/lib/toss";
+import { useTossPayment } from "@/hooks/useTossPayment";
 
 interface Props {
   tripId: number;
@@ -48,6 +50,14 @@ export default function BookingPage({ tripId }: Props) {
   const { data: trip, isLoading: tripLoading } = trpc.trips.byId.useQuery({ id: tripId });
   const { data: boardingPoints, isLoading: bpLoading } = trpc.boardingPoints.byTripId.useQuery({ tripId });
   const { data: pointsBalance } = trpc.points.myBalance.useQuery(undefined, { enabled: isAuthenticated });
+  const { data: tossServer } = trpc.payments.tossEnabled.useQuery(undefined, { enabled: isTossConfigured() });
+  const tossAvailable = isTossConfigured() && !!tossServer?.enabled;
+
+  const [payMethod, setPayMethod] = useState<"toss" | "mock">("mock");
+  // 서버/클라이언트 키가 모두 준비된 경우에만 toss를 기본 선택.
+  useEffect(() => {
+    if (tossAvailable) setPayMethod("toss");
+  }, [tossAvailable]);
 
   const createReservation = trpc.reservations.create.useMutation({
     onSuccess: (data) => {
@@ -57,6 +67,18 @@ export default function BookingPage({ tripId }: Props) {
     onError: (err) => {
       toast.error(err.message || "예약에 실패했습니다.");
     },
+  });
+
+  const createTossOrder = trpc.payments.createTossOrder.useMutation({
+    onError: (err) => toast.error(err.message || "주문 생성에 실패했습니다."),
+  });
+
+  // 위젯은 결제 단계에서 toss 선택 시에만 렌더. 금액은 표시용이며, 승인은
+  // 서버가 주문 생성 시 계산한 금액과 대조해 이뤄진다.
+  const [tossSubmitting, setTossSubmitting] = useState(false);
+  const toss = useTossPayment({
+    enabled: step === 4 && payMethod === "toss" && tossAvailable,
+    amount: (trip?.price ?? 0) * seats - pointsUsed,
   });
 
   if (!isAuthenticated) {
@@ -90,12 +112,12 @@ export default function BookingPage({ tripId }: Props) {
     { departureAt: new Date(trip.departureAt), createdAt: new Date(trip.createdAt) }
   );
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!passengerName || !passengerPhone) {
       toast.error("예약자 정보를 입력해주세요.");
       return;
     }
-    createReservation.mutate({
+    const orderInput = {
       tripId,
       boardingPointId: selectedBoardingPointId ?? undefined,
       seats,
@@ -104,8 +126,30 @@ export default function BookingPage({ tripId }: Props) {
       passengerEmail: passengerEmail || undefined,
       pointsUsed,
       referralCode: referralCode || undefined,
-      paymentMethod: "mock_card",
-    });
+    };
+
+    if (payMethod === "toss") {
+      setTossSubmitting(true);
+      try {
+        const order = await createTossOrder.mutateAsync(orderInput);
+        // 결제창으로 리다이렉트 - 이후 플로우는 successUrl/failUrl 페이지가 이어받는다.
+        await toss.requestPayment({
+          orderId: order.orderId,
+          orderName: order.orderName,
+          amount: order.amount,
+          customerName: passengerName,
+          customerEmail: passengerEmail || undefined,
+        });
+      } catch (err) {
+        // 사용자가 결제창을 닫은 경우 등 - 페이지는 그대로 유지.
+        if (err instanceof Error && err.message) toast.error(err.message);
+      } finally {
+        setTossSubmitting(false);
+      }
+      return;
+    }
+
+    createReservation.mutate({ ...orderInput, paymentMethod: "mock_card" });
   };
 
   const canProceed = () => {
@@ -377,9 +421,47 @@ export default function BookingPage({ tripId }: Props) {
                 </div>
               </div>
 
-              <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-700">
-                ※ 데모 환경입니다. 실제 결제는 이루어지지 않습니다.
-              </div>
+              {/* 결제 수단 선택: toss는 서버(TOSS_SECRET_KEY)와 클라이언트
+                  (VITE_TOSS_CLIENT_KEY) 키가 모두 있을 때만 노출된다. */}
+              {tossAvailable && (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">결제 수단</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPayMethod("toss")}
+                      className={`rounded-lg border p-3 text-sm font-medium transition-all ${
+                        payMethod === "toss" ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
+                      }`}
+                    >
+                      토스페이먼츠
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPayMethod("mock")}
+                      className={`rounded-lg border p-3 text-sm font-medium transition-all ${
+                        payMethod === "mock" ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
+                      }`}
+                    >
+                      데모 결제
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {payMethod === "toss" && tossAvailable ? (
+                <div className="space-y-2">
+                  <div id="toss-payment-methods" />
+                  <div id="toss-agreement" />
+                  {toss.error && (
+                    <p className="text-xs text-destructive">{toss.error}</p>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-700">
+                  ※ 데모 환경입니다. 실제 결제는 이루어지지 않습니다.
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -404,10 +486,18 @@ export default function BookingPage({ tripId }: Props) {
           ) : (
             <Button
               onClick={handleSubmit}
-              disabled={createReservation.isPending}
+              disabled={
+                createReservation.isPending ||
+                tossSubmitting ||
+                (payMethod === "toss" && !toss.ready)
+              }
               className="flex-1 bg-primary"
             >
-              {createReservation.isPending ? "처리 중..." : `${formatPrice(totalAmount)} 결제하기`}
+              {createReservation.isPending || tossSubmitting
+                ? "처리 중..."
+                : payMethod === "toss" && !toss.ready
+                ? "결제수단 불러오는 중..."
+                : `${formatPrice(totalAmount)} 결제하기`}
             </Button>
           )}
         </div>

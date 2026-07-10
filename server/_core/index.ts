@@ -7,6 +7,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { authRateLimiter, globalRateLimiter, writeMutationRateLimiter } from "./rateLimiters";
 import { registerStorageProxy } from "./storageProxy";
+import { registerTossWebhook } from "../tossWebhook";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { validateRequiredEnv } from "./env";
@@ -58,8 +59,10 @@ async function startServer() {
   // express two different limits for the same request.
   app.use("/api/trpc", express.json({ limit: "1mb" }), express.urlencoded({ limit: "1mb", extended: true }));
   app.use("/manus-storage", express.json({ limit: "50mb" }), express.urlencoded({ limit: "50mb", extended: true }));
+  app.use("/api/webhooks", express.json({ limit: "1mb" }));
 
   registerStorageProxy(app);
+  registerTossWebhook(app);
   app.use("/api/oauth", authRateLimiter);
   app.use("/app-auth", authRateLimiter);
   registerOAuthRoutes(app);

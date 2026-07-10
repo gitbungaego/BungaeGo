@@ -13,6 +13,7 @@ import BookingPage from "./pages/Booking";
 import BookingConfirmPage from "./pages/BookingConfirm";
 import RequestJoinPage from "./pages/RequestJoin";
 import RequestJoinConfirmPage from "./pages/RequestJoinConfirm";
+import { TossPaymentFailPage, TossPaymentSuccessPage } from "./pages/TossPaymentResult";
 import CreatePage from "./pages/Create";
 import MyPage from "./pages/MyPage";
 import AdminPage from "./pages/Admin";
@@ -48,6 +49,12 @@ function Router() {
       </Route>
       <Route path="/requests/:id/confirm">
         {(params) => <Layout><RequestJoinConfirmPage requestId={Number(params.id)} /></Layout>}
+      </Route>
+      <Route path="/payments/toss/success">
+        <Layout><TossPaymentSuccessPage /></Layout>
+      </Route>
+      <Route path="/payments/toss/fail">
+        <Layout><TossPaymentFailPage /></Layout>
       </Route>
       <Route path="/create">
         <Layout><CreatePage /></Layout>

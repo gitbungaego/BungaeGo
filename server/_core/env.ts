@@ -9,6 +9,10 @@ export const ENV = {
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
   kakaoRestApiKey: process.env.KAKAO_REST_API_KEY ?? "",
   kakaoClientSecret: process.env.KAKAO_CLIENT_SECRET ?? "",
+  // 의도적으로 REQUIRED_ENV_VARS에 넣지 않는다: 없으면 toss 결제수단만
+  // 비활성화되고(mock은 그대로 동작), 있으면 활성화된다. 라이브 전환은
+  // 테스트 키 → 라이브 키 교체만으로 끝난다.
+  tossSecretKey: process.env.TOSS_SECRET_KEY ?? "",
 };
 
 const REQUIRED_ENV_VARS = ["JWT_SECRET", "DATABASE_URL"] as const;

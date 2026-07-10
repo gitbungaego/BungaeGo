@@ -162,6 +162,7 @@ export const PAYMENT_METHODS = [
   "transfer",
   "vbank",
   "mock",
+  "toss",
 ] as const;
 export const CHARGE_TYPES = ["billing", "prepaid"] as const;
 export const PAYMENT_CANCEL_REASONS = [
@@ -181,13 +182,25 @@ export const payments = mysqlTable(
   "payments",
   {
     id: int("id").autoincrement().primaryKey(),
-    reservationId: int("reservationId").notNull(),
+    // Nullable: a Toss payment is created as a pending "order" before the
+    // reservation exists, and linked to the reservation only after approval.
+    reservationId: int("reservationId"),
     totalAmount: int("totalAmount").notNull(),
     status: mysqlEnum("status", ["pending", "paid", "cancelled", "refunded"])
       .default("pending")
       .notNull(),
     method: mysqlEnum("method", PAYMENT_METHODS).notNull(),
     chargeType: mysqlEnum("chargeType", CHARGE_TYPES).default("prepaid").notNull(),
+    // Merchant-generated order number handed to Toss; unique so the confirm
+    // callback can resolve exactly one pending order.
+    orderId: varchar("orderId", { length: 64 }),
+    // Toss-issued payment key, set once the payment is approved. Required for
+    // any later cancel/refund API call.
+    tossPaymentKey: varchar("tossPaymentKey", { length: 200 }),
+    // What this order should create once approved (reservation / ride request
+    // input captured server-side at order creation, never re-trusted from the
+    // client at confirm time).
+    orderContext: json("orderContext"),
     paidAt: timestamp("paidAt"),
     cancelledAt: timestamp("cancelledAt"),
     cancelReason: mysqlEnum("cancelReason", PAYMENT_CANCEL_REASONS),
@@ -195,7 +208,10 @@ export const payments = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  (table) => [index("payments_reservation_idx").on(table.reservationId)]
+  (table) => [
+    index("payments_reservation_idx").on(table.reservationId),
+    uniqueIndex("payments_order_id_idx").on(table.orderId),
+  ]
 );
 
 export type Payment = typeof payments.$inferSelect;

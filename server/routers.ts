@@ -43,6 +43,7 @@ import {
   getEvents,
   getLatestPaymentByReservationId,
   getPaidPaymentItemTotalsByType,
+  getPaymentByOrderId,
   getPaymentItemsByPaymentId,
   getPendingRideRequestsByEventId,
   getPointsByUserId,
@@ -73,6 +74,9 @@ import {
   updateUserStatus,
 } from "./db";
 import { buildFareItems, cancelReservationsForTrip, computeRefundableAmount } from "./payments";
+import { finalizeReservation, maybeConfirmTrip, validatePointsUsage, type TossOrderContext } from "./reservationFlow";
+import { cancelTossPayment, confirmTossPayment, isTossEnabled, TossApiError } from "./toss";
+import { nanoid } from "nanoid";
 import { buildDemandGrid, summarizeNearbyDemand } from "./demand";
 import { CONSENT_VERSIONS, recordConsent } from "./consents";
 import { isThemeAllowed } from "./featureFlags";
@@ -108,44 +112,9 @@ function resolvePipelineParams(input?: z.infer<typeof pipelineParamsInput>): Pip
   return pipelineParamsSchema.parse(input ?? {});
 }
 
-// ─── Points usage guard ────────────────────────────────────────────────────────
-export function validatePointsUsage(pointsUsed: number, userBalance: number, fareAmount: number): void {
-  if (pointsUsed > userBalance) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "보유 포인트가 부족합니다." });
-  }
-  if (pointsUsed > fareAmount) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "포인트 사용액이 결제 금액을 초과할 수 없습니다." });
-  }
-}
-
-// ─── Trip confirm policy helpers ──────────────────────────────────────────────
-// Normal trips are no longer confirmed the instant minCount is reached — the
-// D-5 scheduler (server/scheduler/tripConfirmScheduler.ts) makes that call.
-// The only case this instant path still fires for is a trip created after
-// its own D-5 boundary ("급하게 만든 셔틀"), which has no future D-5 judgment
-// moment for the scheduler to act on.
-async function maybeConfirmTrip(tripId: number): Promise<void> {
-  const trip = await getTripById(tripId);
-  if (!trip) return;
-  if (!isCreatedAfterOwnD5(trip)) return;
-  const policy = getPolicy(trip.theme);
-  const tripReservations = await getReservationsWithPaymentsByTripId(tripId);
-  if (!policy.canConfirm(trip, tripReservations)) return;
-
-  // Idempotent: only the caller that actually flips collecting -> confirmed
-  // gets true back, so confirm-only follow-up never double-fires when two
-  // reservations for the same trip cross minCount around the same time.
-  const didConfirm = await confirmTripIfCollecting(tripId);
-  if (!didConfirm) return;
-
-  const event = await getEventById(trip.eventId);
-  await notifyTrip(
-    tripId,
-    "tripConfirmed",
-    { eventTitle: event?.title ?? "셔틀", departureAt: trip.departureAt },
-    "all"
-  ).catch((error) => console.warn("[maybeConfirmTrip] notifyTrip failed:", error));
-}
+// Re-exported for existing importers; implementation moved to
+// server/reservationFlow.ts so the Toss confirm path can share it.
+export { validatePointsUsage } from "./reservationFlow";
 
 async function withAvailability(trip: Trip) {
   const policy = getPolicy(trip.theme);
@@ -503,6 +472,9 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
+        // Mock (demo) payment path. The Toss path goes through
+        // payments.createTossOrder → payments.confirmToss instead, sharing
+        // finalizeReservation for the seat-locked reservation itself.
         if (ctx.user.status === "suspended") {
           throw new TRPCError({
             code: "FORBIDDEN",
@@ -513,81 +485,10 @@ export const appRouter = router({
         const trip = await getTripById(input.tripId);
         if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
 
-        validatePointsUsage(input.pointsUsed, ctx.user.pointsBalance, trip.price * input.seats);
-
-        // Handle referral (doesn't touch seat capacity, safe outside the lock)
-        let referrerId: number | undefined;
-        if (input.referralCode) {
-          const referrer = await getUserByReferralCode(input.referralCode);
-          if (referrer && referrer.id !== ctx.user.id) {
-            referrerId = referrer.id;
-          }
-        }
-
-        // Seat validation + reservation insert run inside a single transaction
-        // with the trip row locked (SELECT ... FOR UPDATE), so two concurrent
-        // requests for the last seat can't both read "1 remaining" and both
-        // succeed — the second waits for the lock and re-validates against
-        // the first's already-committed seat count.
-        const reservationId = await reserveSeatsWithLock(input.tripId, async ({ trip: lockedTrip, reservations: tripReservations, insertReservation, incrementCount }) => {
-          const policy = getPolicy(lockedTrip.theme);
-
-          const reserveCheck = policy.canReserve(lockedTrip, tripReservations, ctx.user);
-          if (!reserveCheck.ok) {
-            throw new TRPCError({ code: "BAD_REQUEST", message: reserveCheck.reason });
-          }
-          if (input.seats > policy.availability(lockedTrip, tripReservations).remaining) {
-            throw new TRPCError({ code: "BAD_REQUEST", message: "좌석이 부족합니다." });
-          }
-
-          const id = await insertReservation({
-            userId: ctx.user.id,
-            boardingPointId: input.boardingPointId,
-            seats: input.seats,
-            pointsUsed: input.pointsUsed,
-            passengerName: input.passengerName,
-            passengerPhone: input.passengerPhone,
-            passengerEmail: input.passengerEmail,
-            referralCode: input.referralCode,
-          });
-          await incrementCount(input.seats);
-          return id;
+        const reservationId = await finalizeReservation(ctx.user, input, async (id) => {
+          const items = buildFareItems({ fareAmount: trip.price * input.seats, pointsUsed: input.pointsUsed });
+          await createPaymentWithItems({ reservationId: id, method: "mock", chargeType: "prepaid", items });
         });
-
-        const items = buildFareItems({ fareAmount: trip.price * input.seats, pointsUsed: input.pointsUsed });
-        await createPaymentWithItems({ reservationId, method: "mock", chargeType: "prepaid", items });
-
-        await notifyTrip(
-          input.tripId,
-          "reservationConfirmed",
-          { passengerName: input.passengerName, seats: input.seats, departureAt: trip.departureAt },
-          [ctx.user.id]
-        ).catch((error) => console.warn("[reservations.create] notifyTrip failed:", error));
-
-        // Auto-confirm if this reservation reached minCount
-        await maybeConfirmTrip(input.tripId);
-
-        // Deduct points used
-        if (input.pointsUsed > 0) {
-          await addPoints(ctx.user.id, -input.pointsUsed, "usage", "예약 포인트 사용", String(reservationId));
-        }
-
-        // Referral points — once per referrer/referee pair, ever (including
-        // pairs whose original referral was later cancelled), so a reserve →
-        // cancel → reserve loop with the same code can't re-earn the bonus.
-        if (referrerId) {
-          const existingReferral = await getReferralByPair(referrerId, ctx.user.id);
-          if (!existingReferral) {
-            await createReferral({
-              referrerId,
-              refereeId: ctx.user.id,
-              reservationId,
-              status: "completed",
-            });
-            await addPoints(referrerId, 2000, "referral_earn", "친구 초대 적립", String(reservationId));
-            await addPoints(ctx.user.id, 1000, "referral_earn", "초대 코드 사용 적립", String(reservationId));
-          }
-        }
 
         return { id: reservationId };
       }),
@@ -716,6 +617,232 @@ export const appRouter = router({
       }),
 
     adminList: adminProcedure.query(() => getAllReservations()),
+  }),
+
+  // ─── Payments (Toss Payments 실결제) ─────────────────────────────────────────
+  // 표준 위젯 v2 플로우: createTossOrder(서버가 금액 계산 + pending 주문 저장)
+  // → 클라이언트 위젯 결제 → successUrl 리다이렉트 → confirmToss(금액 대조 후
+  // 승인 API 호출 → 좌석 락 확정). 금액은 어느 단계에서도 클라이언트를 신뢰하지
+  // 않는다.
+  payments: router({
+    tossEnabled: publicProcedure.query(() => ({ enabled: isTossEnabled() })),
+
+    createTossOrder: protectedProcedure
+      .input(
+        z.object({
+          tripId: z.number(),
+          boardingPointId: z.number().optional(),
+          seats: z.number().min(1).max(8),
+          passengerName: z.string().min(1),
+          passengerPhone: z.string().min(1),
+          passengerEmail: z.string().email().optional(),
+          pointsUsed: z.number().min(0).default(0),
+          referralCode: z.string().optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        if (!isTossEnabled()) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "토스 결제가 설정되지 않았습니다." });
+        }
+        if (ctx.user.status === "suspended") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "정지된 계정은 예약을 생성할 수 없습니다. 고객센터로 문의해주세요.",
+          });
+        }
+
+        const trip = await getTripById(input.tripId);
+        if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
+
+        validatePointsUsage(input.pointsUsed, ctx.user.pointsBalance, trip.price * input.seats);
+
+        // Soft availability check so a sold-out trip fails before the user
+        // reaches the payment window; the binding check is the seat lock
+        // inside confirmToss → finalizeReservation.
+        const { availability } = await withAvailability(trip);
+        if (input.seats > availability.remaining) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "좌석이 부족합니다." });
+        }
+
+        const fareAmount = trip.price * input.seats;
+        const amount = fareAmount - input.pointsUsed;
+        if (amount < 100) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "토스 결제 최소 금액(100원) 미만입니다. 포인트 사용액을 조정해주세요.",
+          });
+        }
+
+        const event = await getEventById(trip.eventId);
+        // Toss orderId: 6-64 chars of [A-Za-z0-9-_=]; nanoid's default
+        // alphabet is a subset of that.
+        const orderId = `bungae-${nanoid(21)}`;
+        const context: TossOrderContext = {
+          kind: "reservation",
+          userId: ctx.user.id,
+          tripId: input.tripId,
+          boardingPointId: input.boardingPointId,
+          seats: input.seats,
+          passengerName: input.passengerName,
+          passengerPhone: input.passengerPhone,
+          passengerEmail: input.passengerEmail,
+          pointsUsed: input.pointsUsed,
+          referralCode: input.referralCode,
+        };
+        await createPaymentWithItems({
+          reservationId: null,
+          method: "toss",
+          chargeType: "prepaid",
+          status: "pending",
+          orderId,
+          orderContext: context,
+          items: buildFareItems({ fareAmount, pointsUsed: input.pointsUsed }),
+        });
+
+        return {
+          orderId,
+          amount,
+          orderName: `${event?.title ?? "셔틀"} ${input.seats}석`.slice(0, 100),
+        };
+      }),
+
+    confirmToss: protectedProcedure
+      .input(
+        z.object({
+          paymentKey: z.string().min(1),
+          orderId: z.string().min(6).max(64),
+          amount: z.number().int().positive(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const payment = await getPaymentByOrderId(input.orderId);
+        if (!payment) throw new TRPCError({ code: "NOT_FOUND", message: "주문을 찾을 수 없습니다." });
+
+        const context = payment.orderContext as TossOrderContext | null;
+        if (!context || context.userId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN" });
+        }
+
+        // Double-submit of the same success callback: already finalized.
+        if (payment.status === "paid" && payment.reservationId) {
+          return { kind: context.kind, reservationId: payment.reservationId };
+        }
+        if (payment.status !== "pending") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "이미 처리된 주문입니다." });
+        }
+
+        // ⚠️ 금액 변조 방어의 핵심: successUrl로 돌아온 amount를 주문 생성
+        // 시점에 서버가 계산해 둔 금액과 대조하고, 불일치면 승인 API를 아예
+        // 호출하지 않는다.
+        if (input.amount !== payment.totalAmount) {
+          await updatePaymentStatus(payment.id, "cancelled", {
+            cancelledAt: new Date(),
+            cancelReason: "payment_failed",
+            cancelNote: `금액 불일치: 콜백 ${input.amount}원 ≠ 주문 ${payment.totalAmount}원`,
+          });
+          throw new TRPCError({ code: "BAD_REQUEST", message: "결제 금액이 주문 금액과 일치하지 않습니다." });
+        }
+
+        // 승인 "전" 좌석 소프트 체크: 매진이 확실하면 과금 자체를 막는다.
+        // (최종 확정은 승인 후 좌석 락 안에서 다시 검증된다.)
+        const trip = await getTripById(context.tripId);
+        if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
+        const { availability } = await withAvailability(trip);
+        if (context.seats > availability.remaining) {
+          await updatePaymentStatus(payment.id, "cancelled", {
+            cancelledAt: new Date(),
+            cancelReason: "payment_failed",
+            cancelNote: "승인 전 좌석 매진",
+          });
+          throw new TRPCError({ code: "CONFLICT", message: "좌석이 마감되어 결제를 진행하지 않았습니다." });
+        }
+
+        let tossPayment;
+        try {
+          tossPayment = await confirmTossPayment(input);
+        } catch (error) {
+          if (error instanceof TossApiError) {
+            if (error.code === "ALREADY_PROCESSED_PAYMENT") {
+              // 같은 paymentKey에 대한 동시 승인 요청 - 다른 호출이 확정 중.
+              throw new TRPCError({ code: "CONFLICT", message: "이미 처리 중인 결제입니다. 잠시 후 예약 내역을 확인해주세요." });
+            }
+            await updatePaymentStatus(payment.id, "cancelled", {
+              cancelledAt: new Date(),
+              cancelReason: "payment_failed",
+              cancelNote: `토스 승인 실패 (${error.code})`.slice(0, 300),
+            });
+            throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
+          }
+          throw error;
+        }
+
+        try {
+          const reservationId = await finalizeReservation(ctx.user, context, async (id) => {
+            await updatePaymentStatus(payment.id, "paid", {
+              paidAt: new Date(),
+              tossPaymentKey: tossPayment.paymentKey,
+              reservationId: id,
+            });
+          });
+          return { kind: "reservation" as const, reservationId };
+        } catch (error) {
+          // attachPayment 이후(예약 커밋 이후)의 부수 단계에서 실패한 경우
+          // 예약 자체는 성공했으므로 결제를 취소하면 안 된다.
+          const current = await getPaymentByOrderId(input.orderId);
+          if (current?.status === "paid" && current.reservationId) {
+            console.error("[payments.confirmToss] post-reservation step failed (kept):", error);
+            return { kind: "reservation" as const, reservationId: current.reservationId };
+          }
+
+          // 승인됐는데 좌석 확보 실패(경쟁 상황): 즉시 전액 자동 취소.
+          try {
+            await cancelTossPayment({
+              paymentKey: tossPayment.paymentKey,
+              cancelReason: "좌석 확보 실패 자동 취소",
+              idempotencyKey: `auto-cancel-${payment.id}`,
+            });
+            await updatePaymentStatus(payment.id, "cancelled", {
+              cancelledAt: new Date(),
+              cancelReason: "payment_failed",
+              cancelNote: "승인 후 좌석 확보 실패 - 전액 자동 취소",
+            });
+          } catch (cancelError) {
+            console.error(`[payments.confirmToss] auto-cancel failed for payment ${payment.id}:`, cancelError);
+            await updatePaymentStatus(payment.id, "cancelled", {
+              cancelledAt: new Date(),
+              cancelReason: "payment_failed",
+              cancelNote: "승인 후 좌석 확보 실패 - 자동 취소 실패, 수동 환불 필요",
+            });
+            await notifyOwner({
+              title: "[번개GO] 토스 자동 취소 실패 - 수동 환불 필요",
+              content: `payment #${payment.id} (orderId ${input.orderId}, paymentKey ${tossPayment.paymentKey}) 승인 후 좌석 확보에 실패했으나 자동 취소도 실패했습니다.`,
+            }).catch(() => false);
+          }
+
+          const message = error instanceof TRPCError ? error.message : "예약 확정에 실패했습니다.";
+          throw new TRPCError({ code: "CONFLICT", message: `${message} 결제는 자동 취소되었습니다.` });
+        }
+      }),
+
+    failToss: protectedProcedure
+      .input(z.object({ orderId: z.string(), code: z.string().optional(), message: z.string().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        const payment = await getPaymentByOrderId(input.orderId);
+        if (!payment) throw new TRPCError({ code: "NOT_FOUND" });
+        const context = payment.orderContext as TossOrderContext | null;
+        if (!context || context.userId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN" });
+        }
+        // Idempotent: only a still-pending order transitions to failed.
+        if (payment.status === "pending") {
+          await updatePaymentStatus(payment.id, "cancelled", {
+            cancelledAt: new Date(),
+            cancelReason: "payment_failed",
+            cancelNote: `토스 결제 실패${input.code ? ` (${input.code})` : ""}${input.message ? `: ${input.message}` : ""}`.slice(0, 300),
+          });
+        }
+        return { success: true };
+      }),
   }),
 
   // ─── Ride Requests (pre-matching signup, auto-match events) ──────────────────
