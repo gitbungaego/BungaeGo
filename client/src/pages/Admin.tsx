@@ -176,6 +176,7 @@ function EventsTab() {
             <TableHead>카테고리</TableHead>
             <TableHead>날짜</TableHead>
             <TableHead>상태</TableHead>
+            <TableHead>배차</TableHead>
             <TableHead className="text-right">관리</TableHead>
           </TableRow>
         </TableHeader>
@@ -209,6 +210,19 @@ function EventsTab() {
                 >
                   {event.status === "active" ? "활성" : event.status === "cancelled" ? "취소됨" : "완료"}
                 </Badge>
+              </TableCell>
+              <TableCell>
+                {event.matchingFrozenAt ? (
+                  <Badge variant="outline" className="text-xs bg-blue-50 text-blue-600 border-blue-200">
+                    {event.matchingFrozenBy === "auto" ? "자동 동결" : "수동 동결"}
+                  </Badge>
+                ) : event.autoMatchEnabled ? (
+                  <Badge variant="outline" className="text-xs bg-amber-50 text-amber-600 border-amber-200">
+                    대기중
+                  </Badge>
+                ) : (
+                  <span className="text-xs text-muted-foreground">—</span>
+                )}
               </TableCell>
               <TableCell className="text-right">
                 <div className="flex justify-end gap-1">

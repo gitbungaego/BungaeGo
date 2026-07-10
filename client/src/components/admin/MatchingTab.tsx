@@ -167,7 +167,8 @@ export function MatchingTab() {
 
         {selectedEvent?.matchingFrozenAt && (
           <Badge variant="outline" className="bg-blue-50 text-blue-600 border-blue-200 gap-1">
-            <Snowflake className="h-3 w-3" /> 동결됨
+            <Snowflake className="h-3 w-3" />
+            {selectedEvent.matchingFrozenBy === "auto" ? "자동 동결됨" : "동결됨"}
           </Badge>
         )}
       </div>

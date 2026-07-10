@@ -15,6 +15,14 @@ export const ENV = {
   tossSecretKey: process.env.TOSS_SECRET_KEY ?? "",
 };
 
+// D-7 자동 배차 스케줄러 실행 여부. 기본 false(dry-run: 대상 조회·로그만).
+// 2단계 롤아웃 — dry-run으로 배포해 로그를 관찰한 뒤 true로 켠다. 스케줄러가
+// 매 틱 process.env를 읽으므로(캐시 X) 재배포 없이 토글 가능하고, 테스트도
+// vi.stubEnv로 제어할 수 있다.
+export function isAutoMatchingEnabled(): boolean {
+  return process.env.AUTO_MATCHING_ENABLED === "true";
+}
+
 const REQUIRED_ENV_VARS = ["JWT_SECRET", "DATABASE_URL"] as const;
 
 // Fail fast at boot rather than silently running with an empty JWT signing

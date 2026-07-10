@@ -12,6 +12,7 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { validateRequiredEnv } from "./env";
 import { startTripConfirmScheduler } from "../scheduler/tripConfirmScheduler";
+import { startMatchingFreezeScheduler } from "../scheduler/matchingFreezeScheduler";
 import { serveStatic, setupVite } from "./vite";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -94,6 +95,7 @@ async function startServer() {
   });
 
   startTripConfirmScheduler();
+  startMatchingFreezeScheduler();
 }
 
 startServer().catch((error) => {
