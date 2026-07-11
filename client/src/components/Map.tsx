@@ -182,7 +182,7 @@ export function createDotMarker(map: any, position: MapLatLng, color: string, ti
 export interface BoardingPointMarkerOptions {
   /** Number/text shown inside the marker, e.g. pickup order for the selected trip. */
   label?: string;
-  /** Muted (gray/translucent) styling for a boarding point that belongs to a non-selected trip. */
+  /** Muted (smaller, desaturated) styling for a boarding point that belongs to a non-selected trip. */
   muted?: boolean;
   title?: string;
   onClick?: () => void;
@@ -191,33 +191,83 @@ export interface BoardingPointMarkerOptions {
 // Kakao brand yellow, matching the app's Kakao-login button elsewhere.
 const BOARDING_POINT_COLOR = "#FEE500";
 
+// A classic map teardrop pin, tip at the bottom center so it points at the
+// exact coordinate. viewBox is 28x36; callers pick a pixel size and the image
+// scales, with the anchor offset placed at the tip.
+function teardropSvg(size: number, opts: { fill: string; stroke: string; inner: string; opacity?: number }): { dataUri: string; width: number; height: number } {
+  const width = size;
+  const height = Math.round(size * (36 / 28));
+  const svg = encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 28 36"${opts.opacity != null ? ` opacity="${opts.opacity}"` : ""}>` +
+      `<path d="M14 1 C7.096 1 1.5 6.596 1.5 13.5 C1.5 22 14 35 14 35 C14 35 26.5 22 26.5 13.5 C26.5 6.596 20.904 1 14 1 Z" fill="${opts.fill}" stroke="${opts.stroke}" stroke-width="1.5"/>` +
+      opts.inner +
+      `</svg>`
+  );
+  return { dataUri: `data:image/svg+xml;charset=UTF-8,${svg}`, width, height };
+}
+
 /**
- * Numbered circular marker for a trip's boarding point. Highlighted
- * (brand-yellow, numbered) for the selected trip's stops, muted (gray,
- * translucent) for every other trip's stops shown on the same event-wide map.
+ * Numbered brand-yellow teardrop pin for a trip's boarding point. The selected
+ * trip's stops render large and full-color; every other trip's stops render
+ * smaller and desaturated. A custom SVG marker image (not the default Kakao
+ * pin), on a kakao.maps.Marker so it can still be clustered.
  */
 export function createBoardingPointMarker(map: any, position: MapLatLng, options: BoardingPointMarkerOptions = {}) {
   const { label, muted = false, title, onClick } = options;
   const { kakao } = window;
-  const fill = muted ? "rgba(156,163,175,0.75)" : BOARDING_POINT_COLOR;
-  const textColor = muted ? "#4b5563" : "#111827";
-  const text = label ? `<text x="15" y="19" text-anchor="middle" font-size="12" font-weight="700" fill="${textColor}" font-family="Arial, sans-serif">${label}</text>` : "";
-  const svg = encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30"><circle cx="15" cy="15" r="12" fill="${fill}" stroke="white" stroke-width="3"/><circle cx="15" cy="15" r="14" fill="none" stroke="rgba(17,24,39,0.22)" stroke-width="1"/>${text}</svg>`
-  );
+  const size = muted ? 26 : 36;
+  const fill = muted ? "#E5E7EB" : BOARDING_POINT_COLOR;
+  const textColor = muted ? "#6b7280" : "#111827";
+  const inner = label
+    ? `<text x="14" y="18" text-anchor="middle" font-size="13" font-weight="800" fill="${textColor}" font-family="Arial, sans-serif">${label}</text>`
+    : "";
+  const { dataUri, width, height } = teardropSvg(size, {
+    fill,
+    stroke: "#ffffff",
+    inner,
+    opacity: muted ? 0.85 : 1,
+  });
   const image = new kakao.maps.MarkerImage(
-    `data:image/svg+xml;charset=UTF-8,${svg}`,
-    new kakao.maps.Size(30, 30),
-    { offset: new kakao.maps.Point(15, 15) }
+    dataUri,
+    new kakao.maps.Size(width, height),
+    { offset: new kakao.maps.Point(width / 2, height) }
   );
   const marker = new kakao.maps.Marker({
     map,
     position: new kakao.maps.LatLng(position.lat, position.lng),
     title,
     image,
+    zIndex: muted ? 1 : 3,
   });
   if (onClick) kakao.maps.event.addListener(marker, "click", onClick);
   return marker;
+}
+
+/**
+ * Destination pin: a black teardrop with a white star in the head, clearly
+ * distinct from the yellow boarding pins. One per event (the venue), not
+ * clustered.
+ */
+export function createArrivalMarker(map: any, position: MapLatLng, title?: string) {
+  const { kakao } = window;
+  const star = `<path d="M14 8 l1.6 3.35 3.7 .38 -2.75 2.5 .78 3.65 -3.33 -1.9 -3.33 1.9 .78 -3.65 -2.75 -2.5 3.7 -.38 Z" fill="#ffffff"/>`;
+  const { dataUri, width, height } = teardropSvg(38, {
+    fill: "#111827",
+    stroke: "#ffffff",
+    inner: star,
+  });
+  const image = new kakao.maps.MarkerImage(
+    dataUri,
+    new kakao.maps.Size(width, height),
+    { offset: new kakao.maps.Point(width / 2, height) }
+  );
+  return new kakao.maps.Marker({
+    map,
+    position: new kakao.maps.LatLng(position.lat, position.lng),
+    title,
+    image,
+    zIndex: 5,
+  });
 }
 
 // Same brand yellow as boarding points - demand is "riders who would use a
