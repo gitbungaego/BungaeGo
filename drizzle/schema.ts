@@ -80,6 +80,25 @@ export const events = mysqlTable("events", {
 export type Event = typeof events.$inferSelect;
 export type InsertEvent = typeof events.$inferInsert;
 
+// ─── Event Likes (하트/찜) ──────────────────────────────────────────────────────
+// One row per (event, user) like. No denormalized count on events — like
+// counts are COUNT() aggregates, which is plenty at this scale. The unique
+// index makes the toggle idempotent at the DB level: a duplicate like can
+// never create a second row.
+export const eventLikes = mysqlTable(
+  "event_likes",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    eventId: int("eventId").notNull(),
+    userId: int("userId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("event_likes_event_user_idx").on(table.eventId, table.userId)]
+);
+
+export type EventLike = typeof eventLikes.$inferSelect;
+export type InsertEventLike = typeof eventLikes.$inferInsert;
+
 // ─── Trips (Shuttles) ─────────────────────────────────────────────────────────
 export const TRIP_CANCEL_REASONS = ["admin_cancel", "min_count_not_met"] as const;
 export type TripCancelReason = (typeof TRIP_CANCEL_REASONS)[number];

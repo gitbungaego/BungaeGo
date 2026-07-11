@@ -36,6 +36,7 @@ import {
   boardingPoints,
   clusters,
   consents,
+  eventLikes,
   events,
   paymentItems,
   payments,
@@ -77,6 +78,15 @@ function getErrorChain(error: unknown, depth = 0): unknown[] {
   if (!error || depth > 5) return [];
   const cause = error instanceof Error ? (error as Error & { cause?: unknown }).cause : undefined;
   return [error, ...getErrorChain(cause, depth + 1)];
+}
+
+export function isDuplicateKeyError(error: unknown): boolean {
+  return getErrorChain(error).some((err) => {
+    const code = (err as { code?: unknown } | undefined)?.code;
+    if (code === "ER_DUP_ENTRY") return true;
+    const message = err instanceof Error ? err.message.toLowerCase() : "";
+    return message.includes("duplicate entry");
+  });
 }
 
 export function isRecoverableDatabaseError(error: unknown): boolean {
@@ -280,6 +290,96 @@ export async function getEventById(id: number): Promise<Event | undefined> {
   if (!db) return undefined;
   const result = await db.select().from(events).where(eq(events.id, id)).limit(1);
   return result[0];
+}
+
+// ─── Event Likes ──────────────────────────────────────────────────────────────
+/**
+ * Idempotent like toggle: removes the row if present, inserts it otherwise.
+ * The unique (eventId, userId) index guarantees at most one row per pair even
+ * under a double-tap race. Returns the resulting state + fresh count.
+ */
+export async function toggleEventLike(eventId: number, userId: number): Promise<{ liked: boolean; count: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+
+  const existing = await db
+    .select({ id: eventLikes.id })
+    .from(eventLikes)
+    .where(and(eq(eventLikes.eventId, eventId), eq(eventLikes.userId, userId)))
+    .limit(1);
+
+  let liked: boolean;
+  if (existing.length > 0) {
+    await db.delete(eventLikes).where(eq(eventLikes.id, existing[0].id));
+    liked = false;
+  } else {
+    try {
+      await db.insert(eventLikes).values({ eventId, userId });
+      liked = true;
+    } catch (error) {
+      // Lost a double-tap race to insert the same pair — the unique index
+      // rejected the duplicate, which means it's already liked.
+      if (isDuplicateKeyError(error)) {
+        liked = true;
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  const count = await getEventLikeCount(eventId);
+  return { liked, count };
+}
+
+export async function getEventLikeCount(eventId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(eventLikes)
+    .where(eq(eventLikes.eventId, eventId));
+  return Number(rows[0]?.count ?? 0);
+}
+
+export async function getEventLikeCounts(eventIds: number[]): Promise<Map<number, number>> {
+  const map = new Map<number, number>();
+  if (eventIds.length === 0) return map;
+  const db = await getDb();
+  if (!db) return map;
+  const rows = await db
+    .select({ eventId: eventLikes.eventId, count: sql<number>`count(*)` })
+    .from(eventLikes)
+    .where(inArray(eventLikes.eventId, eventIds))
+    .groupBy(eventLikes.eventId);
+  for (const row of rows) map.set(row.eventId, Number(row.count));
+  return map;
+}
+
+/** Which of the given events the user has liked (for myLiked flags). */
+export async function getLikedEventIds(userId: number, eventIds: number[]): Promise<Set<number>> {
+  const set = new Set<number>();
+  if (eventIds.length === 0) return set;
+  const db = await getDb();
+  if (!db) return set;
+  const rows = await db
+    .select({ eventId: eventLikes.eventId })
+    .from(eventLikes)
+    .where(and(eq(eventLikes.userId, userId), inArray(eventLikes.eventId, eventIds)));
+  for (const row of rows) set.add(row.eventId);
+  return set;
+}
+
+/** Liked events for the MyPage "찜한 이벤트" section, newest like first. */
+export async function getLikedEventsByUser(userId: number): Promise<Event[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select()
+    .from(eventLikes)
+    .innerJoin(events, eq(eventLikes.eventId, events.id))
+    .where(eq(eventLikes.userId, userId))
+    .orderBy(desc(eventLikes.createdAt));
+  return rows.map((r) => r.events);
 }
 
 export async function createEvent(data: InsertEvent): Promise<number> {

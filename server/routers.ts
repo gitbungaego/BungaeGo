@@ -25,8 +25,12 @@ import {
   getBoardingPointsByEventId,
   getBoardingPointsByTripId,
   getEventById,
+  getEventLikeCount,
+  getEventLikeCounts,
   getEvents,
   getLatestPaymentByReservationId,
+  getLikedEventIds,
+  getLikedEventsByUser,
   getLatestPaymentByRideRequestId,
   getPaidPaymentItemTotalsByType,
   getPaymentByOrderId,
@@ -46,6 +50,7 @@ import {
   getUserByOpenId,
   getUserByReferralCode,
   setStopCandidateActive,
+  toggleEventLike,
   updateEvent,
   updateEventStatus,
   updatePaymentStatus,
@@ -144,15 +149,44 @@ export const appRouter = router({
           offset: z.number().optional(),
         })
       )
-      .query(({ input }) => getEvents(input)),
+      .query(async ({ input, ctx }) => {
+        const eventList = await getEvents(input);
+        const ids = eventList.map((e) => e.id);
+        const [likeCounts, likedIds] = await Promise.all([
+          getEventLikeCounts(ids),
+          ctx.user ? getLikedEventIds(ctx.user.id, ids) : Promise.resolve(new Set<number>()),
+        ]);
+        return eventList.map((e) => ({
+          ...e,
+          likeCount: likeCounts.get(e.id) ?? 0,
+          myLiked: likedIds.has(e.id),
+        }));
+      }),
 
     byId: publicProcedure
       .input(z.object({ id: z.number() }))
-      .query(async ({ input }) => {
+      .query(async ({ input, ctx }) => {
         const event = await getEventById(input.id);
         if (!event) throw new TRPCError({ code: "NOT_FOUND" });
-        return event;
+        const [likeCount, likedIds] = await Promise.all([
+          getEventLikeCount(input.id),
+          ctx.user ? getLikedEventIds(ctx.user.id, [input.id]) : Promise.resolve(new Set<number>()),
+        ]);
+        return { ...event, likeCount, myLiked: likedIds.has(input.id) };
       }),
+
+    // Idempotent heart toggle. protectedProcedure — a like belongs to a user.
+    // Rate-limited only by the global 100/min (deliberately NOT in the
+    // write-mutation 20/min list): rapid heart taps are normal usage.
+    toggleLike: protectedProcedure
+      .input(z.object({ eventId: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const event = await getEventById(input.eventId);
+        if (!event) throw new TRPCError({ code: "NOT_FOUND" });
+        return toggleEventLike(input.eventId, ctx.user.id);
+      }),
+
+    myLikedList: protectedProcedure.query(({ ctx }) => getLikedEventsByUser(ctx.user.id)),
 
     create: protectedProcedure
       .input(

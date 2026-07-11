@@ -20,6 +20,8 @@ import {
   CheckCircle2,
   Copy,
   Gift,
+  Heart,
+  MapPin,
   Route as RouteIcon,
   Share2,
   Star,
@@ -74,6 +76,10 @@ export default function MyPage() {
               <Ticket className="h-3.5 w-3.5" />
               예약 내역
             </TabsTrigger>
+            <TabsTrigger value="likes" className="flex-1 gap-1.5">
+              <Heart className="h-3.5 w-3.5" />
+              찜
+            </TabsTrigger>
             <TabsTrigger value="requests" className="flex-1 gap-1.5">
               <RouteIcon className="h-3.5 w-3.5" />
               참가 신청
@@ -90,6 +96,9 @@ export default function MyPage() {
 
           <TabsContent value="reservations">
             <ReservationsTab />
+          </TabsContent>
+          <TabsContent value="likes">
+            <LikedEventsTab />
           </TabsContent>
           <TabsContent value="requests">
             <RideRequestsTab />
@@ -332,6 +341,61 @@ function RideRequestCard({ request, onCancel, cancelling }: { request: any; onCa
           </Button>
         </div>
       )}
+    </div>
+  );
+}
+
+function LikedEventsTab() {
+  const { data: events, isLoading } = trpc.events.myLikedList.useQuery();
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        {[1, 2, 3].map((i) => <Skeleton key={i} className="h-20 rounded-xl" />)}
+      </div>
+    );
+  }
+
+  if (!events || events.length === 0) {
+    return (
+      <div className="text-center py-16 text-muted-foreground">
+        <Heart className="h-10 w-10 mx-auto mb-3 opacity-20" />
+        <p className="font-medium">찜한 이벤트가 없습니다</p>
+        <Button variant="outline" size="sm" className="mt-4" asChild>
+          <Link href="/events">이벤트 보러 가기</Link>
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {events.map((event) => (
+        <Link key={event.id} href={`/events/${event.id}`}>
+          <div className="flex items-center gap-3 rounded-xl border border-border bg-card p-3 hover:border-primary/40 transition-colors cursor-pointer">
+            <div className="h-14 w-14 rounded-lg overflow-hidden bg-muted flex-shrink-0">
+              {event.imageUrl ? (
+                <img src={event.imageUrl} alt={event.title} className="h-full w-full object-cover" />
+              ) : (
+                <div className="h-full w-full flex items-center justify-center bg-gradient-to-br from-primary via-amber-400 to-orange-400">
+                  <Bus className="h-6 w-6 text-white/70" />
+                </div>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold truncate">{event.title}</p>
+              <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                <Calendar className="h-3 w-3" />
+                {formatDate(event.eventDate)}
+              </p>
+              <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                <MapPin className="h-3 w-3" />
+                <span className="truncate">{event.venue}</span>
+              </p>
+            </div>
+          </div>
+        </Link>
+      ))}
     </div>
   );
 }
