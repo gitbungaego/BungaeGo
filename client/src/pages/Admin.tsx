@@ -36,6 +36,15 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { MatchingTab } from "@/components/admin/MatchingTab";
+import { EventEditDialog } from "@/components/admin/EventEditDialog";
+import { EventDeleteDialog } from "@/components/admin/EventDeleteDialog";
+import { AutoMatchDialog } from "@/components/admin/AutoMatchDialog";
+import { TripEditDialog } from "@/components/admin/TripEditDialog";
+import { TripDeleteDialog } from "@/components/admin/TripDeleteDialog";
+import type { RouterOutputs } from "@/lib/trpc";
+
+type AdminEventRow = RouterOutputs["events"]["adminList"][number];
+type AdminTripRow = RouterOutputs["trips"]["adminList"][number];
 
 export default function AdminPage() {
   const { user, isAuthenticated, loading } = useAuth();
@@ -150,16 +159,13 @@ function StatsCards() {
 function EventsTab() {
   const { data: events, isLoading } = trpc.events.adminList.useQuery();
   const utils = trpc.useUtils();
-  const updateStatus = trpc.events.updateStatus.useMutation({
-    onSuccess: () => {
-      toast.success("이벤트 상태가 업데이트되었습니다.");
-      utils.events.adminList.invalidate();
-    },
-    onError: (err) => toast.error(err.message),
-  });
+  const [editEvent, setEditEvent] = useState<AdminEventRow | null>(null);
+  const [deleteEvent, setDeleteEvent] = useState<AdminEventRow | null>(null);
+  const [autoMatchEvent, setAutoMatchEvent] = useState<AdminEventRow | null>(null);
+
   const setAutoMatch = trpc.events.setAutoMatch.useMutation({
     onSuccess: () => {
-      toast.success("자동 매칭 설정이 변경되었습니다.");
+      toast.success("자동 매칭이 꺼졌습니다.");
       utils.events.adminList.invalidate();
     },
     onError: (err) => toast.error(err.message),
@@ -226,17 +232,17 @@ function EventsTab() {
               </TableCell>
               <TableCell className="text-right">
                 <div className="flex justify-end gap-1">
-                  {event.status === "active" && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="text-xs h-7 text-destructive border-destructive/30"
-                      onClick={() => updateStatus.mutate({ id: event.id, status: "cancelled" })}
-                      disabled={updateStatus.isPending}
-                    >
-                      취소
-                    </Button>
-                  )}
+                  <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => setEditEvent(event)}>
+                    편집
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs h-7 text-destructive border-destructive/30 hover:bg-destructive/5"
+                    onClick={() => setDeleteEvent(event)}
+                  >
+                    삭제
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
@@ -245,19 +251,9 @@ function EventsTab() {
                     onClick={() => {
                       if (event.autoMatchEnabled) {
                         setAutoMatch.mutate({ id: event.id, autoMatchEnabled: false });
-                        return;
+                      } else {
+                        setAutoMatchEvent(event);
                       }
-                      const priceInput = window.prompt(
-                        "자동 매칭 좌석당 가격(원)을 입력하세요.",
-                        event.autoMatchPricePerSeat ? String(event.autoMatchPricePerSeat) : ""
-                      );
-                      if (!priceInput) return;
-                      const price = Number(priceInput);
-                      if (!Number.isFinite(price) || price < 0) {
-                        toast.error("올바른 가격을 입력하세요.");
-                        return;
-                      }
-                      setAutoMatch.mutate({ id: event.id, autoMatchEnabled: true, autoMatchPricePerSeat: price });
                     }}
                   >
                     {event.autoMatchEnabled ? "자동매칭 끄기" : "자동매칭 켜기"}
@@ -271,6 +267,10 @@ function EventsTab() {
           ))}
         </TableBody>
       </Table>
+
+      <EventEditDialog event={editEvent} open={!!editEvent} onOpenChange={(o) => !o && setEditEvent(null)} />
+      <EventDeleteDialog event={deleteEvent} open={!!deleteEvent} onOpenChange={(o) => !o && setDeleteEvent(null)} />
+      <AutoMatchDialog event={autoMatchEvent} open={!!autoMatchEvent} onOpenChange={(o) => !o && setAutoMatchEvent(null)} />
     </div>
   );
 }
@@ -278,6 +278,8 @@ function EventsTab() {
 function TripsTab() {
   const { data: trips, isLoading } = trpc.trips.adminList.useQuery();
   const utils = trpc.useUtils();
+  const [editTrip, setEditTrip] = useState<AdminTripRow | null>(null);
+  const [deleteTrip, setDeleteTrip] = useState<AdminTripRow | null>(null);
   const updateStatus = trpc.trips.updateStatus.useMutation({
     onSuccess: () => {
       toast.success("셔틀 상태가 업데이트되었습니다.");
@@ -334,15 +336,17 @@ function TripsTab() {
                       확정
                     </Button>
                   )}
-                  {(trip.status === "collecting" || trip.status === "confirmed") && (
+                  <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => setEditTrip(trip)}>
+                    편집
+                  </Button>
+                  {trip.status !== "cancelled" && (
                     <Button
                       variant="outline"
                       size="sm"
-                      className="text-xs h-7 text-destructive border-destructive/30"
-                      onClick={() => updateStatus.mutate({ id: trip.id, status: "cancelled" })}
-                      disabled={updateStatus.isPending}
+                      className="text-xs h-7 text-destructive border-destructive/30 hover:bg-destructive/5"
+                      onClick={() => setDeleteTrip(trip)}
                     >
-                      취소
+                      삭제
                     </Button>
                   )}
                 </div>
@@ -351,6 +355,9 @@ function TripsTab() {
           ))}
         </TableBody>
       </Table>
+
+      <TripEditDialog trip={editTrip} open={!!editTrip} onOpenChange={(o) => !o && setEditTrip(null)} />
+      <TripDeleteDialog trip={deleteTrip} open={!!deleteTrip} onOpenChange={(o) => !o && setDeleteTrip(null)} />
     </div>
   );
 }
