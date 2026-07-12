@@ -94,6 +94,13 @@ curl -s -o /dev/null -w "%{http_code}\n" "https://bungaego.com/api/oauth/kakao/l
 
 프로덕션 DB: **TiDB Cloud `test`** (`gateway01.ap-northeast-1.prod.aws.tidbcloud.com`).
 
-## 알려진 부채
+## 알려진 부채 — drizzle-kit migrate 미작동 (정상화 defer)
 
-`drizzle-kit migrate`가 0000 baseline 누락 + `__drizzle_migrations` 부재로 작동하지 않아, 위 수동 `apply-*.cjs` 절차가 유일한 적용 경로다. 마이그레이션 체계 정상화(자동화) 검토는 별도 이슈로 진행한다.
+`drizzle-kit migrate`가 **0000 baseline SQL 누락 + 프로덕션 `__drizzle_migrations` 추적 테이블 부재**로 작동하지 않아, 위 수동 `apply-*.cjs` 절차가 유일한 적용 경로다.
+
+정상화(0000 baseline 복원 + `__drizzle_migrations`에 기존 마이그레이션 해시 시드)는 검토 후 **defer 결정**. 사유:
+
+- 수동 `apply-*.cjs` 절차가 안정적으로 동작 중이고 위 런북으로 문서화됨.
+- 시드할 해시가 drizzle 계산값과 어긋나면 migrate가 기존 마이그레이션을 **재실행**해 "이미 존재하는 테이블" 에러를 낼 위험이 있음.
+
+향후 정상화가 필요해지면 **부팅 시 자동 migrate가 아니라 수동 `drizzle-kit migrate` 표준화(방식 a)**로 진행한다 — 부팅-자동은 migrate 실패 시 앱이 아예 안 뜨는 가용성 위험이 실이익보다 크다.
