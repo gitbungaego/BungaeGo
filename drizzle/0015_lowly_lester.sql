@@ -1,0 +1,1 @@
+ALTER TABLE `events` MODIFY COLUMN `status` enum('active','cancelled','completed','deleted') NOT NULL DEFAULT 'active';

@@ -61,7 +61,9 @@ export const events = mysqlTable("events", {
   lng: decimal("lng", { precision: 10, scale: 7 }),
   imageUrl: text("imageUrl"),
   description: text("description"),
-  status: mysqlEnum("status", ["active", "cancelled", "completed"])
+  // "deleted" is the admin soft-delete state: hidden from public lists/search
+  // (getEvents filters status="active") but kept in the DB and admin views.
+  status: mysqlEnum("status", ["active", "cancelled", "completed", "deleted"])
     .default("active")
     .notNull(),
   creatorId: int("creatorId"),

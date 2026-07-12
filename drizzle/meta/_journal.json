@@ -106,6 +106,13 @@
       "when": 1783823229319,
       "tag": "0014_loose_black_panther",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "5",
+      "when": 1783826339001,
+      "tag": "0015_lowly_lester",
+      "breakpoints": true
     }
   ]
 }

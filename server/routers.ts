@@ -10,10 +10,12 @@ import {
   createBoardingPoint,
   createEvent,
   createPaymentWithItems,
+  countReservationsByEventId,
   createStopCandidate,
   createTrip,
   decrementTripCount,
   deleteBoardingPoint,
+  deleteEventCascade,
   ensureReferralCode,
   getActiveRallyPointCandidates,
   getAllEvents,
@@ -51,11 +53,13 @@ import {
   getUserByReferralCode,
   setStopCandidateActive,
   toggleEventLike,
+  updateBoardingPoint,
   updateEvent,
   updateEventStatus,
   updatePaymentStatus,
   updateReferralStatus,
   updateRideRequestStatus,
+  updateTrip,
   updateTripStatus,
   updateUserStatus,
 } from "./db";
@@ -66,6 +70,7 @@ import {
   refundTossPaymentIfNeeded,
 } from "./payments";
 import { finalizeReservation, finalizeRideRequest, maybeConfirmTrip, validatePointsUsage, type TossOrderContext } from "./reservationFlow";
+import { auditLog } from "./audit";
 import { cancelTossPayment, confirmTossPayment, isTossEnabled, TossApiError } from "./toss";
 import { nanoid } from "nanoid";
 import { buildDemandGrid, summarizeNearbyDemand } from "./demand";
@@ -1214,6 +1219,187 @@ export const appRouter = router({
           }).catch(() => false);
 
           return { success: true, refundedCount, refundFailures };
+        }),
+    }),
+
+    // ─── Admin content editing/deletion (owner-agnostic) ─────────────────────
+    events: router({
+      // Full-field event edit. Admin can edit any member's event.
+      update: adminProcedure
+        .input(
+          z.object({
+            id: z.number(),
+            title: z.string().min(2).optional(),
+            category: z.enum(["concert", "sports", "festival", "rally", "exhibition", "other"]).optional(),
+            eventDate: z.number().optional(),
+            venue: z.string().min(2).optional(),
+            address: z.string().optional(),
+            imageUrl: z.string().optional(),
+            description: z.string().optional(),
+            organizerName: z.string().optional(),
+            searchAliases: z.string().max(500).optional(),
+            tags: z.string().max(500).optional(),
+          })
+        )
+        .mutation(async ({ input, ctx }) => {
+          const { id, eventDate, ...rest } = input;
+          const event = await getEventById(id);
+          if (!event) throw new TRPCError({ code: "NOT_FOUND" });
+          await updateEvent(id, {
+            ...rest,
+            ...(eventDate !== undefined ? { eventDate: new Date(eventDate) } : {}),
+          });
+          auditLog(ctx.user.id, "event.update", { type: "event", id }, { fields: Object.keys(rest) });
+          return { success: true };
+        }),
+
+      // Soft delete (status="deleted", hidden from public lists) by default.
+      // Hard delete only when the event has zero reservations, else rejected.
+      delete: adminProcedure
+        .input(z.object({ id: z.number(), hard: z.boolean().default(false) }))
+        .mutation(async ({ input, ctx }) => {
+          const event = await getEventById(input.id);
+          if (!event) throw new TRPCError({ code: "NOT_FOUND" });
+
+          if (input.hard) {
+            const reservationCount = await countReservationsByEventId(input.id);
+            if (reservationCount > 0) {
+              throw new TRPCError({
+                code: "PRECONDITION_FAILED",
+                message: `예약 ${reservationCount}건이 연결되어 있어 완전 삭제할 수 없습니다. 먼저 셔틀/예약을 정리하세요.`,
+              });
+            }
+            await deleteEventCascade(input.id);
+            auditLog(ctx.user.id, "event.delete.hard", { type: "event", id: input.id });
+            return { success: true, mode: "hard" as const };
+          }
+
+          await updateEventStatus(input.id, "deleted");
+          auditLog(ctx.user.id, "event.delete.soft", { type: "event", id: input.id });
+          return { success: true, mode: "soft" as const };
+        }),
+    }),
+
+    trips: router({
+      // Trip-level edit. A confirmed trip's riders were already notified, so
+      // changing its price requires an explicit forceConfirmedEdit flag; the
+      // client shows a warning first.
+      update: adminProcedure
+        .input(
+          z
+            .object({
+              id: z.number(),
+              mode: z.enum(["bus", "van"]).optional(),
+              minCount: z.number().min(1).optional(),
+              maxCount: z.number().min(1).optional(),
+              price: z.number().min(0).max(1_000_000, "1인당 요금은 100만원을 초과할 수 없습니다.").optional(),
+              departureAt: z.number().optional(),
+              isRoundTrip: z.boolean().optional(),
+              notes: z.string().optional(),
+              forceConfirmedEdit: z.boolean().default(false),
+            })
+            .refine((d) => d.minCount === undefined || d.maxCount === undefined || d.minCount <= d.maxCount, {
+              message: "최소 인원은 최대 인원보다 클 수 없습니다.",
+              path: ["minCount"],
+            })
+        )
+        .mutation(async ({ input, ctx }) => {
+          const { id, forceConfirmedEdit, departureAt, ...rest } = input;
+          const trip = await getTripById(id);
+          if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
+
+          // Cross-field validation against the merged result (a partial patch
+          // must still leave minCount <= maxCount).
+          const nextMin = rest.minCount ?? trip.minCount;
+          const nextMax = rest.maxCount ?? trip.maxCount;
+          if (nextMin > nextMax) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "최소 인원은 최대 인원보다 클 수 없습니다." });
+          }
+
+          if (trip.status === "confirmed") {
+            const changesPrice = rest.price !== undefined && rest.price !== trip.price;
+            if (changesPrice && !forceConfirmedEdit) {
+              throw new TRPCError({
+                code: "PRECONDITION_FAILED",
+                message: "확정된 노선의 가격 변경은 이미 통보된 승객에게 영향을 줍니다. 확인 후 다시 시도하세요.",
+              });
+            }
+          }
+
+          await updateTrip(id, {
+            ...rest,
+            ...(departureAt !== undefined ? { departureAt: new Date(departureAt) } : {}),
+          });
+          auditLog(ctx.user.id, "trip.update", { type: "trip", id }, { fields: Object.keys(rest), forced: forceConfirmedEdit });
+          return { success: true };
+        }),
+
+      // Soft delete via cancel. If active reservations exist, require an
+      // explicit confirmRefund — then refund everyone (cancelReservationsForTrip)
+      // before cancelling the trip.
+      delete: adminProcedure
+        .input(z.object({ id: z.number(), confirmRefund: z.boolean().default(false) }))
+        .mutation(async ({ input, ctx }) => {
+          const trip = await getTripById(input.id);
+          if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
+          if (trip.status === "cancelled") {
+            return { success: true, refundedCount: 0 };
+          }
+
+          // Payment-flattened view: raw reservation rows have no status, so the
+          // "active" set is those whose (latest) payment is still paid — exactly
+          // the ones cancelReservationsForTrip will refund.
+          const tripReservations = await getReservationsWithPaymentsByTripId(input.id);
+          const active = tripReservations.filter((r) => r.status === "paid");
+
+          if (active.length > 0 && !input.confirmRefund) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `이 노선에 예약 ${active.length}건이 있습니다. 삭제하면 예약자 전원에게 환불됩니다. 확인 후 진행하세요.`,
+            });
+          }
+
+          if (active.length > 0) {
+            await cancelReservationsForTrip(trip);
+          }
+          await updateTripStatus(input.id, "cancelled", "admin_cancel");
+          auditLog(ctx.user.id, "trip.delete", { type: "trip", id: input.id }, { refundedCount: active.length });
+          return { success: true, refundedCount: active.length };
+        }),
+    }),
+
+    boardingPoints: router({
+      update: adminProcedure
+        .input(
+          z.object({
+            id: z.number(),
+            name: z.string().min(1).optional(),
+            address: z.string().optional(),
+            lat: z.string().optional(),
+            lng: z.string().optional(),
+            pickupTime: z.number().nullable().optional(),
+          })
+        )
+        .mutation(async ({ input, ctx }) => {
+          const { id, pickupTime, ...rest } = input;
+          const bp = await getBoardingPointById(id);
+          if (!bp) throw new TRPCError({ code: "NOT_FOUND", message: "정류장을 찾을 수 없습니다." });
+          await updateBoardingPoint(id, {
+            ...rest,
+            ...(pickupTime !== undefined ? { pickupTime: pickupTime === null ? null : new Date(pickupTime) } : {}),
+          });
+          auditLog(ctx.user.id, "boardingPoint.update", { type: "boardingPoint", id });
+          return { success: true };
+        }),
+
+      delete: adminProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          const bp = await getBoardingPointById(input.id);
+          if (!bp) throw new TRPCError({ code: "NOT_FOUND", message: "정류장을 찾을 수 없습니다." });
+          await deleteBoardingPoint(input.id);
+          auditLog(ctx.user.id, "boardingPoint.delete", { type: "boardingPoint", id: input.id });
+          return { success: true };
         }),
     }),
   }),

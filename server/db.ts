@@ -422,6 +422,37 @@ export async function updateEvent(id: number, data: Partial<InsertEvent>): Promi
   await db.update(events).set(data).where(eq(events.id, id));
 }
 
+/** Total reservations attached to an event (across all its trips). 0 => a hard
+ *  delete is safe. */
+export async function countReservationsByEventId(eventId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(reservations)
+    .innerJoin(trips, eq(reservations.tripId, trips.id))
+    .where(eq(trips.eventId, eventId));
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** Hard delete an event and everything hanging off it: reservations + their
+ *  payments, boarding points, trips, clusters, ride requests, likes, then the
+ *  event row. Callers must gate this on the delete policy (0 reservations). */
+export async function deleteEventCascade(eventId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const eventTrips = await db.select({ id: trips.id }).from(trips).where(eq(trips.eventId, eventId));
+  for (const t of eventTrips) {
+    await deleteReservationsByTripId(t.id);
+    await db.delete(boardingPoints).where(eq(boardingPoints.tripId, t.id));
+  }
+  await db.delete(trips).where(eq(trips.eventId, eventId));
+  await db.delete(clusters).where(eq(clusters.eventId, eventId));
+  await db.delete(rideRequests).where(eq(rideRequests.eventId, eventId));
+  await db.delete(eventLikes).where(eq(eventLikes.eventId, eventId));
+  await db.delete(events).where(eq(events.id, eventId));
+}
+
 /**
  * Atomically claim the freeze for an event: sets matchingFrozenAt/By only if
  * it is still null. Returns true iff this call won the race (affected a row).
@@ -497,6 +528,13 @@ export async function updateTripStatus(
   const patch: Partial<Trip> = { status };
   if (cancelReason !== undefined) patch.cancelReason = cancelReason;
   await db.update(trips).set(patch).where(eq(trips.id, id));
+}
+
+// Admin edit of trip-level fields.
+export async function updateTrip(id: number, data: Partial<InsertTrip>): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(trips).set(data).where(eq(trips.id, id));
 }
 
 // Conditional UPDATE guarded by the current status: only the caller whose
@@ -679,6 +717,13 @@ export async function deleteBoardingPoint(id: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
   await db.delete(boardingPoints).where(eq(boardingPoints.id, id));
+}
+
+// Admin edit of a single boarding point (owner-agnostic).
+export async function updateBoardingPoint(id: number, data: Partial<InsertBoardingPoint>): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(boardingPoints).set(data).where(eq(boardingPoints.id, id));
 }
 
 export async function deleteBoardingPointsByTripId(tripId: number): Promise<void> {
