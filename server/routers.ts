@@ -201,6 +201,9 @@ export const appRouter = router({
           imageUrl: z.string().optional(),
           description: z.string().optional(),
           organizerName: z.string().optional(),
+          // Comma-separated hidden search keywords and public tags.
+          searchAliases: z.string().max(500).optional(),
+          tags: z.string().max(500).optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {

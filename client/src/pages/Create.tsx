@@ -59,6 +59,19 @@ export default function CreatePage() {
   const [lng, setLng] = useState<number | null>(null);
   const [description, setDescription] = useState("");
   const [imageUrl, setImageUrl] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState("");
+  const [searchAliases, setSearchAliases] = useState("");
+
+  const RECOMMENDED_TAGS = ["K-POP", "콘서트", "페스티벌", "뮤지컬", "스포츠"];
+
+  const addTag = (raw: string) => {
+    const tag = raw.trim();
+    if (!tag) return;
+    setTags((prev) => (prev.some((t) => t.toLowerCase() === tag.toLowerCase()) ? prev : [...prev, tag]));
+    setTagInput("");
+  };
+  const removeTag = (tag: string) => setTags((prev) => prev.filter((t) => t !== tag));
 
   const [map, setMap] = useState<any>(null);
   const [placeMarker, setPlaceMarker] = useState<any>(null);
@@ -146,6 +159,8 @@ export default function CreatePage() {
         lng: lng !== null ? String(lng) : undefined,
         imageUrl: imageUrl || undefined,
         description: description || undefined,
+        tags: tags.length ? tags.join(",") : undefined,
+        searchAliases: searchAliases.trim() || undefined,
       });
 
       const departureMs = new Date(`${departureDate}T${departureTime}`).getTime();
@@ -319,6 +334,61 @@ export default function CreatePage() {
               <div className="space-y-1.5">
                 <Label>설명 (선택)</Label>
                 <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="이벤트에 대한 간략한 설명을 입력하세요." rows={3} />
+              </div>
+
+              {/* Tags — public, shown as badges + searchable */}
+              <div className="space-y-1.5">
+                <Label>태그 (선택)</Label>
+                <p className="text-xs text-muted-foreground">장르·장소·아티스트 등 (예: K-POP, 고척돔, 월드투어)</p>
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-2 min-h-11">
+                  {tags.map((tag) => (
+                    <Badge key={tag} variant="secondary" className="gap-1 py-1">
+                      {tag}
+                      <button type="button" onClick={() => removeTag(tag)} className="ml-0.5 text-muted-foreground hover:text-foreground" aria-label={`${tag} 삭제`}>
+                        ×
+                      </button>
+                    </Badge>
+                  ))}
+                  <input
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === ",") {
+                        e.preventDefault();
+                        addTag(tagInput);
+                      } else if (e.key === "Backspace" && !tagInput && tags.length) {
+                        removeTag(tags[tags.length - 1]);
+                      }
+                    }}
+                    placeholder={tags.length ? "" : "태그 입력 후 Enter"}
+                    className="flex-1 min-w-[8rem] bg-transparent text-sm outline-none py-1"
+                  />
+                </div>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {RECOMMENDED_TAGS.filter((t) => !tags.some((x) => x.toLowerCase() === t.toLowerCase())).map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => addTag(t)}
+                      className="px-2.5 py-1 rounded-full text-xs border border-dashed border-border text-muted-foreground hover:border-primary/40 hover:text-foreground transition-colors"
+                    >
+                      + {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Search aliases — hidden, bilingual search keywords only */}
+              <div className="space-y-1.5">
+                <Label>검색 별칭 (선택)</Label>
+                <Input
+                  value={searchAliases}
+                  onChange={(e) => setSearchAliases(e.target.value)}
+                  placeholder="코르티스, cortis, 코티"
+                />
+                <p className="text-xs text-muted-foreground">
+                  표기 변형을 쉼표로 구분해 입력하세요. 화면에는 안 보이고 검색에만 쓰입니다 (한글↔영문 검색 대응).
+                </p>
               </div>
             </div>
           )}
