@@ -1,6 +1,6 @@
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { getLoginUrl } from "@/const";
+import { getLoginUrl, KAKAO_CHANNEL_CHAT_URL } from "@/const";
 import { evaluateCancellation } from "@shared/cancellationPolicy";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -22,6 +22,7 @@ import {
   Gift,
   Heart,
   MapPin,
+  MessageCircle,
   Route as RouteIcon,
   Share2,
   Star,
@@ -234,6 +235,18 @@ function ReservationCard({ reservation, onCancel, cancelling }: { reservation: a
           </div>
         </div>
       )}
+
+      <div className="mt-3 pt-3 border-t border-border/60">
+        <a
+          href={KAKAO_CHANNEL_CHAT_URL}
+          target="_blank"
+          rel="noopener"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-[#FEE500] px-3 py-1.5 text-xs font-medium text-black hover:brightness-95 transition-all"
+        >
+          <MessageCircle className="h-3.5 w-3.5" />
+          예약 관련 문의
+        </a>
+      </div>
     </div>
   );
 }

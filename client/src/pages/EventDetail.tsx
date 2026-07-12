@@ -14,6 +14,7 @@ import { Link, useLocation } from "wouter";
 import { MapView, createArrivalMarker, createBoardingPointMarker } from "@/components/Map";
 import { HeartButton } from "@/components/HeartButton";
 import { PointInterestSection } from "@/components/PointInterestSection";
+import { KAKAO_CHANNEL_CHAT_URL } from "@/const";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 interface Props {
@@ -321,6 +322,18 @@ export default function EventDetailPage({ id }: Props) {
           )}
 
           <PointInterestSection eventId={event.id} />
+
+          <p className="mt-6 text-center text-xs text-muted-foreground">
+            궁금한 점이 있나요?{" "}
+            <a
+              href={KAKAO_CHANNEL_CHAT_URL}
+              target="_blank"
+              rel="noopener"
+              className="font-medium text-black underline decoration-[#FEE500] decoration-2 underline-offset-2 hover:bg-[#FEE500]/40 rounded px-0.5 transition-colors"
+            >
+              카카오톡으로 문의하기
+            </a>
+          </p>
         </div>
       </div>
 
