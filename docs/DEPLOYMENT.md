@@ -83,9 +83,14 @@ curl -s -o /dev/null -w "%{http_code}\n" "https://bungaego.com/api/oauth/kakao/l
 
 ## 지금까지 적용된 마이그레이션 기록
 
+> ⚠️ **2026-07-13 실측 갱신**: 아래 표는 기록이 아니라 `scripts/check-schema-drift.cjs`로 로컬 스키마와 프로덕션(`test`) information_schema를 **직접 비교한 결과**를 반영한다. 이전 버전은 "0001–0009 적용됨"으로 잘못 기록되어 있었는데, 실제로는 **0002와 0009가 프로덕션에 적용된 적이 없었다** — 로컬 `.env`가 며칠간 별도 TiDB DB(`bungaego`, 유령 DB)를 가리키고 있어서 로컬 검증이 프로덕션과 어긋난 채로도 티가 안 났다. 앞으로는 추측 대신 이 스크립트로 확인한다.
+
 | # | tag | 내용 | 프로덕션 |
 |---|-----|------|:---:|
-| 0001–0009 | (초기) | 기본 스키마(users, events, trips, reservations, payments, ride_requests, clusters, stop_candidates, rally_point_candidates 등) | 적용됨 |
+| 0001 | mysterious_betty_ross | 기본 스키마(users, events, trips, reservations, payments 등 baseline) | 적용됨 |
+| 0002 | flippant_firedrake | reservations: `status`/`totalAmount`/`paymentId`/`paymentMethod`/`cancelledAt`/`cancelReason` 컬럼 제거 (payments 테이블로 이관) | **미적용** — 프로덕션 reservations에 6개 컬럼이 아직 남아있음 |
+| 0003–0008 | (중간 스키마 변경) | ride_requests/clusters/stop_candidates 등 매칭 파이프라인 스키마 | 적용됨 |
+| 0009 | lethal_trauma | `rally_point_candidates` 테이블 신규 생성 | 적용됨(실측 2026-07-13, `scripts/apply-0009-migration.cjs` + `seedRallyPoints.ts` 15건) |
 | 0010 | parallel_the_phantom | payments: `reservationId` nullable화, `method` enum에 `toss`, `orderId`(unique)/`tossPaymentKey`/`orderContext` 추가 | 적용됨 |
 | 0011 | solid_molten_man | payments: `rideRequestId`, `refundedAmount` + 인덱스 | 적용됨 |
 | 0012 | curved_jimmy_woo | events: `matchingFrozenBy` enum('admin','auto') | 적용됨 |
@@ -94,7 +99,18 @@ curl -s -o /dev/null -w "%{http_code}\n" "https://bungaego.com/api/oauth/kakao/l
 | 0015 | lowly_lester | events: `status` enum에 `deleted` 추가 (cascade 삭제) | 적용됨 |
 | 0016 | zippy_hulk | `point_interests` 테이블 (UNIQUE(eventId,rallyPointCandidateId,userId)) | 적용됨 |
 
+**0002는 보류 중** — 프로덕션 `reservations`에 남은 4행(전부 개발자 본인의 테스트/스모크 데이터, 실사용자 없음 — [RESERVATIONS_LEGACY_COLUMNS.md](./RESERVATIONS_LEGACY_COLUMNS.md) 참고) 유실을 동반하는 파괴적 변경이라 별도 세션에서 백업 후 진행 예정.
+
 프로덕션 DB: **TiDB Cloud `test`** (`gateway01.ap-northeast-1.prod.aws.tidbcloud.com`).
+
+## 환경 원칙 — 로컬 DB와 프로덕션 DB는 반드시 분리
+
+- **로컬 개발**: `localhost` MySQL의 `bungaego_dev` (반드시 로컬 인스턴스, TiDB 아님).
+- **프로덕션**: TiDB Cloud `test` (`gateway01.ap-northeast-1.prod.aws.tidbcloud.com`) — 정식 스키마명으로 개명 예정이나 현재는 `test`.
+- **로컬 `.env`에는 절대 프로덕션(TiDB) `DATABASE_URL`을 넣지 않는다.** 프로덕션 접속 정보는 오직 `.env.production.local`(gitignore 대상)에만 둔다.
+- 2026-07-13 사고: 로컬 `.env`의 `DATABASE_URL`이 실수로 TiDB `bungaego`(별도 dev 스키마)를 가리키고 있던 채로 며칠간 방치됨 → 로컬에서 검증한 화면/기능이 실제로는 프로덕션과 다른 DB를 보고 있었고, 그 사이 나간 마이그레이션 0002/0009가 프로덕션에 누락되는 걸 못 알아챔. 이 사고를 계기로 로컬 DB를 완전히 별도 로컬 MySQL 인스턴스(`bungaego_dev`)로 분리했다.
+- 옛 TiDB `bungaego` 스키마는 데이터를 그대로 `bungaego_ghost_20260712`로 이전(테이블 단위 `RENAME TABLE`)해 원래 이름을 없앴다. **`bungaego_ghost_20260712`는 2026-07-19 이후 삭제 예정**(1주일 안전망). 내용은 전부 개발용 시드/테스트 데이터로 확인됨(실사용자 데이터 없음 — id 범위가 프로덕션과 안 겹치고, `rally_point_candidates` 15건은 `seedRallyPoints.ts` 시드와 정확히 일치).
+- **배포 전 선택 실행**: `DATABASE_URL=<로컬> TARGET_DATABASE_URL=<프로덕션> node scripts/check-schema-drift.cjs`로 로컬과 프로덕션 스키마가 정말 일치하는지 확인한다. 0이 아니면 배포를 멈추고 drift부터 해소한다.
 
 ## 알려진 부채 — drizzle-kit migrate 미작동 (정상화 defer)
 
