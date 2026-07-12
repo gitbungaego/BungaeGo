@@ -116,4 +116,7 @@ temp/
 client/public/__manus__/version.json
 .project-config.json
 
+# Throwaway verification/scratch scripts (created during dev, not source)
+scripts/_tmp-*
+
 .vercel
