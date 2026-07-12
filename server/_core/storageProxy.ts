@@ -1,6 +1,10 @@
 import type { Express } from "express";
 import { ENV } from "./env";
 
+// ⚠️ Manus 전용 - 현 Railway 환경에서 미작동 (forge env 부재로 항상 500).
+// 앱 정적 자산은 client/public(예: /logo.png)으로 서빙한다. R2 승격 시
+// 이 presigned-GET 307 리다이렉트 패턴을 재사용할 예정 - server/storage.ts
+// 상단 주석 참고.
 export function registerStorageProxy(app: Express) {
   app.get("/manus-storage/*", async (req, res) => {
     const key = (req.params as Record<string, string>)[0];

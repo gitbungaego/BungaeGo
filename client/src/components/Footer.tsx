@@ -8,7 +8,7 @@ export default function Footer() {
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
           <div className="space-y-2">
             <Link href="/" className="flex items-center gap-2">
-              <img src="/manus-storage/logo-beonggaego_ed3e311f.png" alt="번개GO" className="h-7 w-7 rounded-lg" />
+              <img src="/logo.png" alt="번개GO" className="h-7 w-7 rounded-lg" />
               <span className="font-bold text-base">
                 <span className="text-primary">번개</span>GO
               </span>

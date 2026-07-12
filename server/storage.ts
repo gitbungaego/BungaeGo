@@ -1,3 +1,11 @@
+// ⚠️ Manus 전용 - 현 Railway 환경에서 미작동.
+// Forge API(BUILT_IN_FORGE_API_*)는 Manus 샌드박스에서만 제공되는 서비스라
+// Railway 프로덕션에는 해당 env가 없고(→ config missing), 로컬 .env는
+// localhost:9999를 가리키지만 그 서버가 없다(→ ECONNREFUSED).
+// 삭제하지 않는 이유: R2(S3 호환) 승격 시 이 presigned PUT/GET 패턴을
+// 그대로 재사용할 예정 (@aws-sdk/client-s3 + s3-request-presigner는 이미
+// dependencies에 있음).
+//
 // Preconfigured storage helpers for Manus WebDev templates
 // Uploads via Forge Server presigned URL to S3 (PUT direct).
 // Downloads return /manus-storage/{key} paths served via 307 redirect.

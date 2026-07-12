@@ -1,4 +1,8 @@
 /**
+ * ⚠️ Manus 전용 - 어느 라우트에서도 사용되지 않는 죽은 코드이며, 의존하는
+ * Forge API/storagePut이 현 Railway 환경에서 미작동 (server/storage.ts 참고).
+ * 삭제하지 않고 표시만 해 둠.
+ *
  * Image generation helper using internal ImageService
  *
  * Example usage:
