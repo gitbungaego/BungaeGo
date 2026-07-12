@@ -1,5 +1,5 @@
 import { trpc } from "@/lib/trpc";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,13 @@ export default function EventsPage() {
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
 
+  // Search-as-you-type: the query fires 300ms after the last keystroke, so
+  // results update live. The search button stays (submits immediately).
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(searchInput), 300);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
   const { data: events, isLoading } = trpc.events.list.useQuery({
     category: category === "all" ? undefined : category,
     search: search || undefined,
@@ -51,7 +58,7 @@ export default function EventsPage() {
           <Input
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="이벤트명, 장소 검색..."
+            placeholder="아티스트, 이벤트, 장소 검색 (한글·영문 모두)"
             className="pl-10 pr-24 h-11 rounded-xl border-border/80"
           />
           <Button type="submit" size="sm" className="absolute right-1.5 top-1/2 -translate-y-1/2 h-8 px-3">
@@ -97,8 +104,28 @@ export default function EventsPage() {
         ) : (
           <div className="text-center py-24 text-muted-foreground">
             <Bus className="h-12 w-12 mx-auto mb-4 opacity-20" />
-            <p className="font-medium">이벤트가 없습니다</p>
-            <p className="text-sm mt-1">다른 카테고리나 검색어를 시도해보세요</p>
+            {search ? (
+              <>
+                <p className="font-medium">'{search}'에 대한 결과가 없어요</p>
+                <p className="text-sm mt-1">한글·영문 표기를 바꿔 검색해보세요</p>
+              </>
+            ) : (
+              <p className="font-medium">이벤트가 없습니다</p>
+            )}
+            {(search || category !== "all") && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-4"
+                onClick={() => {
+                  setSearchInput("");
+                  setSearch("");
+                  setCategory("all");
+                }}
+              >
+                필터 초기화
+              </Button>
+            )}
           </div>
         )}
       </div>

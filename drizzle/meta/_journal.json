@@ -99,6 +99,13 @@
       "when": 1783774014367,
       "tag": "0013_bumpy_genesis",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1783823229319,
+      "tag": "0014_loose_black_panther",
+      "breakpoints": true
     }
   ]
 }

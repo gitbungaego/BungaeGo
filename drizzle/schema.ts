@@ -66,6 +66,13 @@ export const events = mysqlTable("events", {
     .notNull(),
   creatorId: int("creatorId"),
   organizerName: varchar("organizerName", { length: 200 }),
+  // Comma-separated hidden search keywords bridging Korean↔English spellings
+  // (e.g. "CORTIS,코르티스,cortis"). Never displayed; only fed into the search
+  // OR-match so "코르티스" finds "CORTIS".
+  searchAliases: text("searchAliases"),
+  // Comma-separated public tags (genre/venue/artist, e.g. "K-POP,고척돔").
+  // Shown as small badges on the event detail hero and also searched.
+  tags: text("tags"),
   autoMatchEnabled: boolean("autoMatchEnabled").default(false).notNull(),
   autoMatchPricePerSeat: int("autoMatchPricePerSeat"),
   matchingFrozenAt: timestamp("matchingFrozenAt"),

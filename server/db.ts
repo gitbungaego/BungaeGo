@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { createPool, type PoolOptions } from "mysql2/promise";
 import {
@@ -52,6 +52,7 @@ import {
 import { ENV } from "./_core/env";
 import { nanoid } from "nanoid";
 import type { PipelineOutput } from "./matching/pipeline";
+import { escapeLikePattern, normalizeSearchTerm } from "./search";
 
 let _db: ReturnType<typeof createMysqlDb> | null = null;
 
@@ -256,6 +257,12 @@ export async function getAllUsers(): Promise<User[]> {
 }
 
 // ─── Events ───────────────────────────────────────────────────────────────────
+// Columns searched for each token. LOWER() is applied to both sides because
+// events.title/venue use a binary (utf8mb4_bin) collation, which would
+// otherwise make "CORTIS" not match "%cortis%". searchAliases carries the
+// Korean↔English spelling variants; there is no artist column, so it's skipped.
+const EVENT_SEARCH_COLUMNS = [events.title, events.venue, events.searchAliases, events.tags, events.description];
+
 export async function getEvents(opts?: {
   category?: string;
   search?: string;
@@ -269,12 +276,17 @@ export async function getEvents(opts?: {
     conditions.push(eq(events.category, opts.category as Event["category"]));
   }
   if (opts?.search) {
-    conditions.push(
-      or(
-        like(events.title, `%${opts.search}%`),
-        like(events.venue, `%${opts.search}%`)
-      )!
-    );
+    // Each token must match SOMEWHERE (OR across columns); all tokens must
+    // match (AND between tokens). So "코르티스 서울" needs "코르티스" in some
+    // column and "서울" in some column, not necessarily the same one.
+    const tokens = normalizeSearchTerm(opts.search);
+    for (const token of tokens) {
+      const pattern = `%${escapeLikePattern(token)}%`;
+      const perColumn = EVENT_SEARCH_COLUMNS.map(
+        (col) => sql`lower(${col}) like ${pattern} escape '!'`
+      );
+      conditions.push(or(...perColumn)!);
+    }
   }
   return db
     .select()

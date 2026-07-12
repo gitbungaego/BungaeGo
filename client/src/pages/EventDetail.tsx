@@ -197,6 +197,20 @@ export default function EventDetailPage({ id }: Props) {
               </div>
             </div>
           </div>
+          {/* Tags (display only) */}
+          {event.tags && (
+            <div className="flex flex-wrap gap-1.5 px-4 py-3 bg-card">
+              {event.tags
+                .split(",")
+                .map((t) => t.trim())
+                .filter(Boolean)
+                .map((tag) => (
+                  <span key={tag} className="rounded-full bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">
+                    {tag}
+                  </span>
+                ))}
+            </div>
+          )}
         </div>
 
         {/* ── Block 2: Map (stop pins + arrival pin only) ── */}
