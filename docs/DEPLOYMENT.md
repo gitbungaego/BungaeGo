@@ -91,6 +91,8 @@ curl -s -o /dev/null -w "%{http_code}\n" "https://bungaego.com/api/oauth/kakao/l
 | 0012 | curved_jimmy_woo | events: `matchingFrozenBy` enum('admin','auto') | 적용됨 |
 | 0013 | bumpy_genesis | `event_likes` 테이블 (UNIQUE(eventId,userId)) | 적용됨 |
 | 0014 | loose_black_panther | events: `searchAliases`, `tags` (검색 별칭/태그) | 적용됨 |
+| 0015 | lowly_lester | events: `status` enum에 `deleted` 추가 (cascade 삭제) | 적용됨 |
+| 0016 | zippy_hulk | `point_interests` 테이블 (UNIQUE(eventId,rallyPointCandidateId,userId)) | 적용됨 |
 
 프로덕션 DB: **TiDB Cloud `test`** (`gateway01.ap-northeast-1.prod.aws.tidbcloud.com`).
 
