@@ -9,6 +9,8 @@ vi.mock("./db", async (importOriginal) => {
     updateEventStatus: vi.fn(),
     countReservationsByEventId: vi.fn(),
     deleteEventCascade: vi.fn(),
+    getEventDeletionImpact: vi.fn(),
+    cascadeDeleteEventWithRefunds: vi.fn(),
     getTripById: vi.fn(),
     updateTrip: vi.fn(),
     updateTripStatus: vi.fn(),
@@ -24,8 +26,22 @@ vi.mock("./payments", async (importOriginal) => {
   return { ...actual, cancelReservationsForTrip: vi.fn() };
 });
 
+vi.mock("./toss", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./toss")>();
+  return { ...actual, cancelTossPayment: vi.fn().mockResolvedValue({ payment: null, alreadyCanceled: false }) };
+});
+
+vi.mock("./notify/tripMessenger", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./notify/tripMessenger")>();
+  return { ...actual, notifyEventCancellation: vi.fn().mockResolvedValue({ sentCount: 0, failedCount: 0 }) };
+});
+
+vi.mock("./_core/notification", () => ({ notifyOwner: vi.fn().mockResolvedValue(true) }));
+
 import * as db from "./db";
 import { cancelReservationsForTrip } from "./payments";
+import { cancelTossPayment } from "./toss";
+import { notifyEventCancellation } from "./notify/tripMessenger";
 import { appRouter } from "./routers";
 import type { BoardingPoint, Event, ReservationWithPayment, Trip } from "../drizzle/schema";
 import type { TrpcContext } from "./_core/context";
@@ -110,8 +126,9 @@ describe("admin.events.update", () => {
 });
 
 describe("admin.events.delete - soft/hard policy", () => {
-  it("soft delete sets status=deleted (default)", async () => {
+  it("soft delete sets status=deleted (default, no reservations)", async () => {
     vi.mocked(db.getEventById).mockResolvedValue(fakeEvent());
+    vi.mocked(db.getEventDeletionImpact).mockResolvedValue({ tripCount: 0, reservationCount: 0, totalRefund: 0 });
     const caller = appRouter.createCaller(ctx("admin"));
     const r = await caller.admin.events.delete({ id: 5 });
     expect(r.mode).toBe("soft");
@@ -134,6 +151,62 @@ describe("admin.events.delete - soft/hard policy", () => {
     const r = await caller.admin.events.delete({ id: 5, hard: true });
     expect(r.mode).toBe("hard");
     expect(db.deleteEventCascade).toHaveBeenCalledWith(5);
+  });
+});
+
+describe("admin.events.delete - cascade (reservations present)", () => {
+  it("returns the impact and does NOT delete when reservations exist and confirmCascade is false", async () => {
+    vi.mocked(db.getEventById).mockResolvedValue(fakeEvent());
+    vi.mocked(db.getEventDeletionImpact).mockResolvedValue({ tripCount: 2, reservationCount: 5, totalRefund: 145000 });
+
+    const caller = appRouter.createCaller(ctx("admin"));
+    const r = await caller.admin.events.delete({ id: 5 });
+
+    expect(r).toEqual({ mode: "needsConfirm", tripCount: 2, reservationCount: 5, totalRefund: 145000 });
+    expect(db.cascadeDeleteEventWithRefunds).not.toHaveBeenCalled();
+    expect(db.updateEventStatus).not.toHaveBeenCalled();
+    expect(notifyEventCancellation).not.toHaveBeenCalled();
+  });
+
+  it("soft-deletes directly when there are no reservations", async () => {
+    vi.mocked(db.getEventById).mockResolvedValue(fakeEvent());
+    vi.mocked(db.getEventDeletionImpact).mockResolvedValue({ tripCount: 1, reservationCount: 0, totalRefund: 0 });
+
+    const caller = appRouter.createCaller(ctx("admin"));
+    const r = await caller.admin.events.delete({ id: 5 });
+
+    expect(r.mode).toBe("soft");
+    expect(db.updateEventStatus).toHaveBeenCalledWith(5, "deleted");
+    expect(db.cascadeDeleteEventWithRefunds).not.toHaveBeenCalled();
+  });
+
+  it("on confirmCascade: runs the transactional cascade then notifies affected users", async () => {
+    vi.mocked(db.getEventById).mockResolvedValue(fakeEvent({ title: "취소되는 이벤트" }));
+    vi.mocked(db.getEventDeletionImpact).mockResolvedValue({ tripCount: 2, reservationCount: 3, totalRefund: 90000 });
+    vi.mocked(db.cascadeDeleteEventWithRefunds).mockResolvedValue({
+      tripCount: 2,
+      reservationCount: 3,
+      totalRefund: 90000,
+      pointsRefunded: 2000,
+      tossRefundJobs: [{ paymentId: 11, paymentKey: "pk_x", amount: 30000 }],
+      recipients: [
+        { userId: 42, reservationId: 1, seats: 1, passengerName: "A", passengerPhone: "010", passengerEmail: null },
+        { userId: 43, reservationId: 2, seats: 2, passengerName: "B", passengerPhone: null, passengerEmail: "b@x.com" },
+      ],
+    });
+
+    const caller = appRouter.createCaller(ctx("admin"));
+    const r = await caller.admin.events.delete({ id: 5, confirmCascade: true });
+
+    expect(db.cascadeDeleteEventWithRefunds).toHaveBeenCalledWith(5);
+    // Toss job cancelled externally (post-commit).
+    expect(cancelTossPayment).toHaveBeenCalledWith(expect.objectContaining({ paymentKey: "pk_x" }));
+    // Cancellation notice sent to the deduped recipient list with the event title.
+    expect(notifyEventCancellation).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ userId: 42 }), expect.objectContaining({ userId: 43 })]),
+      "취소되는 이벤트"
+    );
+    expect(r).toMatchObject({ mode: "cascade", reservationCount: 3, totalRefund: 90000, pointsRefunded: 2000 });
   });
 });
 

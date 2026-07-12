@@ -453,6 +453,168 @@ export async function deleteEventCascade(eventId: number): Promise<void> {
   await db.delete(events).where(eq(events.id, eventId));
 }
 
+// ─── Cascade soft-delete with full refunds (admin) ────────────────────────────
+export interface CascadeDeleteRecipient {
+  userId: number;
+  reservationId: number;
+  seats: number;
+  passengerName: string | null;
+  passengerPhone: string | null;
+  passengerEmail: string | null;
+}
+
+export interface CascadeDeleteResult {
+  tripCount: number;
+  reservationCount: number; // paid reservations refunded
+  totalRefund: number; // cash refunded (sum of paid payment totals)
+  pointsRefunded: number; // total points restored
+  tossRefundJobs: { paymentId: number; paymentKey: string; amount: number }[];
+  recipients: CascadeDeleteRecipient[]; // deduped by userId
+}
+
+export interface CascadeDeleteHooks {
+  // Test-only seam to force a mid-transaction failure and prove rollback.
+  failBeforeCommit?: () => void | Promise<void>;
+}
+
+/** Read-only impact preview for the delete confirmation dialog. */
+export async function getEventDeletionImpact(
+  eventId: number
+): Promise<{ tripCount: number; reservationCount: number; totalRefund: number }> {
+  const db = await getDb();
+  if (!db) return { tripCount: 0, reservationCount: 0, totalRefund: 0 };
+  const eventTrips = await db.select({ id: trips.id }).from(trips).where(eq(trips.eventId, eventId));
+  if (eventTrips.length === 0) return { tripCount: 0, reservationCount: 0, totalRefund: 0 };
+  const resRows = await db
+    .select({ id: reservations.id })
+    .from(reservations)
+    .where(inArray(reservations.tripId, eventTrips.map((t) => t.id)));
+  const paymentsByRes = await getLatestPaymentsByReservationIds(resRows.map((r) => r.id));
+  let reservationCount = 0;
+  let totalRefund = 0;
+  for (const p of Array.from(paymentsByRes.values())) {
+    if (p.status === "paid") {
+      reservationCount++;
+      totalRefund += p.totalAmount;
+    }
+  }
+  return { tripCount: eventTrips.length, reservationCount, totalRefund };
+}
+
+/**
+ * Transactionally soft-deletes an event that has reservations: cancels every
+ * trip, cancels every paid payment (full refund — admin/company-fault, no
+ * fee, same policy as computeRefundableAmount("admin")), restores used points,
+ * and marks the event "deleted" — all in ONE transaction so a mid-way failure
+ * rolls the whole thing back.
+ *
+ * External side effects are NOT done here (executeMatching pattern): the
+ * caller runs the returned Toss cancel jobs and the cancellation
+ * notifications AFTER commit, since neither can be rolled back.
+ */
+export async function cascadeDeleteEventWithRefunds(
+  eventId: number,
+  hooks: CascadeDeleteHooks = {}
+): Promise<CascadeDeleteResult> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const now = new Date();
+
+  return db.transaction(async (tx) => {
+    const eventTrips = await tx.select().from(trips).where(eq(trips.eventId, eventId));
+    const tripIds = eventTrips.map((t) => t.id);
+
+    const resRows = tripIds.length
+      ? await tx.select().from(reservations).where(inArray(reservations.tripId, tripIds))
+      : [];
+    const resIds = resRows.map((r) => r.id);
+    const paymentRows = resIds.length
+      ? await tx.select().from(payments).where(inArray(payments.reservationId, resIds))
+      : [];
+    // Latest payment per reservation.
+    const latestByRes = new Map<number, Payment>();
+    for (const p of paymentRows) {
+      if (p.reservationId === null) continue;
+      const cur = latestByRes.get(p.reservationId);
+      if (!cur || p.id > cur.id) latestByRes.set(p.reservationId, p);
+    }
+
+    // Cancel all trips.
+    for (const trip of eventTrips) {
+      await tx.update(trips).set({ status: "cancelled", cancelReason: "admin_cancel" }).where(eq(trips.id, trip.id));
+    }
+
+    const result: CascadeDeleteResult = {
+      tripCount: eventTrips.length,
+      reservationCount: 0,
+      totalRefund: 0,
+      pointsRefunded: 0,
+      tossRefundJobs: [],
+      recipients: [],
+    };
+    const seenUsers = new Set<number>();
+
+    for (const reservation of resRows) {
+      const payment = latestByRes.get(reservation.id);
+      if (!payment || payment.status !== "paid") continue;
+
+      // Full refund (admin/company-fault: no cancellation fee).
+      await tx
+        .update(payments)
+        .set({
+          status: "cancelled",
+          cancelledAt: now,
+          cancelReason: "admin",
+          cancelNote: `이벤트 삭제 전액 환불 (환불액 ${payment.totalAmount}원)`,
+          refundedAmount: payment.totalAmount,
+        })
+        .where(eq(payments.id, payment.id));
+      result.reservationCount++;
+      result.totalRefund += payment.totalAmount;
+
+      if (payment.method === "toss" && payment.tossPaymentKey) {
+        result.tossRefundJobs.push({ paymentId: payment.id, paymentKey: payment.tossPaymentKey, amount: payment.totalAmount });
+      }
+
+      // Restore used points (inline, not addPoints(), to stay in this tx).
+      if (reservation.pointsUsed > 0) {
+        await tx
+          .update(users)
+          .set({ pointsBalance: sql`${users.pointsBalance} + ${reservation.pointsUsed}` })
+          .where(eq(users.id, reservation.userId));
+        const [row] = await tx.select({ pointsBalance: users.pointsBalance }).from(users).where(eq(users.id, reservation.userId));
+        await tx.insert(points).values({
+          userId: reservation.userId,
+          type: "refund",
+          amount: reservation.pointsUsed,
+          balanceAfter: row?.pointsBalance ?? reservation.pointsUsed,
+          description: "이벤트 삭제로 인한 포인트 환불",
+          refId: String(reservation.id),
+        });
+        result.pointsRefunded += reservation.pointsUsed;
+      }
+
+      if (!seenUsers.has(reservation.userId)) {
+        seenUsers.add(reservation.userId);
+        result.recipients.push({
+          userId: reservation.userId,
+          reservationId: reservation.id,
+          seats: reservation.seats,
+          passengerName: reservation.passengerName,
+          passengerPhone: reservation.passengerPhone,
+          passengerEmail: reservation.passengerEmail,
+        });
+      }
+    }
+
+    await tx.update(events).set({ status: "deleted" }).where(eq(events.id, eventId));
+
+    if (hooks.failBeforeCommit) await hooks.failBeforeCommit();
+
+    return result;
+  });
+}
+
 /**
  * Atomically claim the freeze for an event: sets matchingFrozenAt/By only if
  * it is still null. Returns true iff this call won the race (affected a row).

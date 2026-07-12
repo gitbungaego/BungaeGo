@@ -24,6 +24,10 @@ interface TripCancelledParams {
   eventTitle: string;
 }
 
+interface EventCancelledParams {
+  eventTitle: string;
+}
+
 interface DepartureReminderParams {
   departureAt: Date;
   boardingPointName?: string;
@@ -42,6 +46,10 @@ const TEMPLATES = {
   tripCancelled: (p: TripCancelledParams): TripMessage => ({
     title: "셔틀 운행 취소 안내",
     body: `[${p.eventTitle}] 최소 인원 미달로 셔틀 운행이 취소됐습니다. 결제하신 금액은 전액 환불됩니다.`,
+  }),
+  eventCancelled: (p: EventCancelledParams): TripMessage => ({
+    title: "이벤트 셔틀 취소 안내",
+    body: `[${p.eventTitle}] 셔틀 서비스가 내부 사정으로 취소되었습니다. 결제하신 금액은 전액 환불되며, 환불은 3-5일 내 처리됩니다. 불편을 드려 죄송합니다.`,
   }),
   departureReminder: (p: DepartureReminderParams): TripMessage => ({
     title: "출발 안내",
@@ -92,15 +100,7 @@ export interface NotifyTripResult {
   failedCount: number;
 }
 
-export async function notifyTrip<K extends TripTemplateKey>(
-  tripId: number,
-  templateKey: K,
-  params: TemplateParamsOf<K>,
-  audience: ParticipantFilter = "all"
-): Promise<NotifyTripResult> {
-  const message = buildTripMessage(templateKey, params);
-  const participants = await getTripParticipants(tripId, audience);
-
+async function sendToParticipants(participants: TripParticipant[], message: TripMessage): Promise<NotifyTripResult> {
   let sentCount = 0;
   let failedCount = 0;
   for (const participant of participants) {
@@ -110,10 +110,33 @@ export async function notifyTrip<K extends TripTemplateKey>(
         sentCount++;
       } catch (error) {
         failedCount++;
-        console.warn(`[notifyTrip] ${channel.name} send failed for user ${participant.userId}:`, error);
+        console.warn(`[notify] ${channel.name} send failed for user ${participant.userId}:`, error);
       }
     }
   }
-
   return { sentCount, failedCount };
+}
+
+export async function notifyTrip<K extends TripTemplateKey>(
+  tripId: number,
+  templateKey: K,
+  params: TemplateParamsOf<K>,
+  audience: ParticipantFilter = "all"
+): Promise<NotifyTripResult> {
+  const message = buildTripMessage(templateKey, params);
+  const participants = await getTripParticipants(tripId, audience);
+  return sendToParticipants(participants, message);
+}
+
+/**
+ * Event-cancellation notice sent to a pre-deduped recipient list (one entry
+ * per affected user across all the event's trips). Used by the admin cascade
+ * delete. Same mock channels as notifyTrip — swap for a real provider later.
+ */
+export async function notifyEventCancellation(
+  recipients: TripParticipant[],
+  eventTitle: string
+): Promise<NotifyTripResult> {
+  const message = buildTripMessage("eventCancelled", { eventTitle });
+  return sendToParticipants(recipients, message);
 }

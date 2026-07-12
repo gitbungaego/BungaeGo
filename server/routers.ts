@@ -10,12 +10,14 @@ import {
   createBoardingPoint,
   createEvent,
   createPaymentWithItems,
+  cascadeDeleteEventWithRefunds,
   countReservationsByEventId,
   createStopCandidate,
   createTrip,
   decrementTripCount,
   deleteBoardingPoint,
   deleteEventCascade,
+  getEventDeletionImpact,
   ensureReferralCode,
   getActiveRallyPointCandidates,
   getAllEvents,
@@ -77,7 +79,7 @@ import { buildDemandGrid, summarizeNearbyDemand } from "./demand";
 import { CONSENT_VERSIONS, recordConsent } from "./consents";
 import { isThemeAllowed } from "./featureFlags";
 import { getPolicy } from "./matching/confirmPolicy";
-import { notifyTrip } from "./notify/tripMessenger";
+import { notifyEventCancellation, notifyTrip } from "./notify/tripMessenger";
 import { runMatchingPipeline } from "./matching/pipeline";
 import { pipelineParamsInput, resolvePipelineParams } from "./matching/matchingParams";
 import { executeMatching, getMatchingStopCandidates, RALLY_POINT_CANDIDATE_ID_OFFSET, MatchingError } from "./matching/executeMatching";
@@ -1253,10 +1255,15 @@ export const appRouter = router({
           return { success: true };
         }),
 
-      // Soft delete (status="deleted", hidden from public lists) by default.
-      // Hard delete only when the event has zero reservations, else rejected.
+      // Delete policy:
+      //  - hard=true: permanent delete, only when the event has zero
+      //    reservations (unchanged).
+      //  - soft path with no reservations: mark "deleted".
+      //  - soft path with reservations: refuse to "just delete" — return the
+      //    impact and require confirmCascade, then refund everyone in full +
+      //    notify them + soft-delete, as one set.
       delete: adminProcedure
-        .input(z.object({ id: z.number(), hard: z.boolean().default(false) }))
+        .input(z.object({ id: z.number(), hard: z.boolean().default(false), confirmCascade: z.boolean().default(false) }))
         .mutation(async ({ input, ctx }) => {
           const event = await getEventById(input.id);
           if (!event) throw new TRPCError({ code: "NOT_FOUND" });
@@ -1271,12 +1278,69 @@ export const appRouter = router({
             }
             await deleteEventCascade(input.id);
             auditLog(ctx.user.id, "event.delete.hard", { type: "event", id: input.id });
-            return { success: true, mode: "hard" as const };
+            return { mode: "hard" as const };
           }
 
-          await updateEventStatus(input.id, "deleted");
-          auditLog(ctx.user.id, "event.delete.soft", { type: "event", id: input.id });
-          return { success: true, mode: "soft" as const };
+          const impact = await getEventDeletionImpact(input.id);
+
+          // No reservations → plain soft delete.
+          if (impact.reservationCount === 0) {
+            await updateEventStatus(input.id, "deleted");
+            auditLog(ctx.user.id, "event.delete.soft", { type: "event", id: input.id });
+            return { mode: "soft" as const };
+          }
+
+          // Has reservations but not yet confirmed → return the impact so the
+          // client can warn before the cascade.
+          if (!input.confirmCascade) {
+            return {
+              mode: "needsConfirm" as const,
+              tripCount: impact.tripCount,
+              reservationCount: impact.reservationCount,
+              totalRefund: impact.totalRefund,
+            };
+          }
+
+          // Confirmed cascade: transactional refunds + soft-delete, then the
+          // external side effects (Toss cancels, notifications) post-commit.
+          const cascade = await cascadeDeleteEventWithRefunds(input.id);
+
+          for (const job of cascade.tossRefundJobs) {
+            try {
+              await cancelTossPayment({
+                paymentKey: job.paymentKey,
+                cancelReason: "이벤트 삭제 전액 환불",
+                idempotencyKey: `event-delete-${job.paymentId}`,
+              });
+            } catch (error) {
+              console.error(`[admin.events.delete] toss cancel failed for payment ${job.paymentId}:`, error);
+              await notifyOwner({
+                title: "[번개GO] 이벤트 삭제 토스 환불 실패 - 수동 처리 필요",
+                content: `${event.title} / payment #${job.paymentId} (${job.amount}원) 환불에 실패했습니다.`,
+              }).catch(() => false);
+            }
+          }
+
+          const notified = await notifyEventCancellation(cascade.recipients, event.title).catch((error) => {
+            console.error("[admin.events.delete] notifyEventCancellation failed:", error);
+            return { sentCount: 0, failedCount: cascade.recipients.length };
+          });
+
+          auditLog(ctx.user.id, "event.delete.cascade", { type: "event", id: input.id }, {
+            trips: cascade.tripCount,
+            reservationsRefunded: cascade.reservationCount,
+            totalRefund: cascade.totalRefund,
+            pointsRefunded: cascade.pointsRefunded,
+            notified: notified.sentCount,
+          });
+
+          return {
+            mode: "cascade" as const,
+            reservationCount: cascade.reservationCount,
+            totalRefund: cascade.totalRefund,
+            pointsRefunded: cascade.pointsRefunded,
+            notifiedCount: notified.sentCount,
+          };
         }),
     }),
 
