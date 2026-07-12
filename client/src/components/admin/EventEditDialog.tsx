@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { CATEGORY_LABELS } from "@/lib/constants";
+import { ImageUrlField } from "@/components/ImageUrlField";
 
 const CATEGORIES = ["concert", "sports", "festival", "rally", "exhibition", "other"] as const;
 
@@ -140,10 +141,11 @@ export function EventEditDialog({ event, open, onOpenChange }: { event: AdminEve
             <Label>주최</Label>
             <Input value={form.organizerName} onChange={set("organizerName")} />
           </div>
-          <div className="space-y-1.5">
-            <Label>이미지 URL</Label>
-            <Input value={form.imageUrl} onChange={set("imageUrl")} />
-          </div>
+          <ImageUrlField
+            label="이미지 URL"
+            value={form.imageUrl}
+            onChange={(v) => setForm((f) => ({ ...f, imageUrl: v }))}
+          />
           <div className="space-y-1.5">
             <Label>설명</Label>
             <Textarea value={form.description} onChange={set("description")} rows={2} />

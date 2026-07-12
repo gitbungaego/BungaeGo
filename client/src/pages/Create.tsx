@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { MapView, searchKeyword, type KakaoPlaceResult } from "@/components/Map";
+import { ImageUrlField } from "@/components/ImageUrlField";
 import { CATEGORY_LABELS } from "@/lib/constants";
 import {
   ArrowLeft,
@@ -327,10 +328,7 @@ export default function CreatePage() {
                   </p>
                 )}
               </div>
-              <div className="space-y-1.5">
-                <Label>이미지 URL (선택)</Label>
-                <Input value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder="https://..." />
-              </div>
+              <ImageUrlField value={imageUrl} onChange={setImageUrl} />
               <div className="space-y-1.5">
                 <Label>설명 (선택)</Label>
                 <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="이벤트에 대한 간략한 설명을 입력하세요." rows={3} />
