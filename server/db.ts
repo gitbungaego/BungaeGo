@@ -40,6 +40,7 @@ import {
   events,
   paymentItems,
   payments,
+  pointInterests,
   points,
   rallyPointCandidates,
   referrals,
@@ -392,6 +393,80 @@ export async function getLikedEventsByUser(userId: number): Promise<Event[]> {
     .where(eq(eventLikes.userId, userId))
     .orderBy(desc(eventLikes.createdAt));
   return rows.map((r) => r.events);
+}
+
+// ─── Point Interests (+1 여기서 출발 원해요) ────────────────────────────────────
+/**
+ * Idempotent interest toggle, same pattern as toggleEventLike: remove if
+ * present, insert otherwise; a lost double-tap insert race (unique index)
+ * counts as already-interested. Returns the resulting state + fresh count.
+ */
+export async function togglePointInterest(
+  eventId: number,
+  rallyPointCandidateId: number,
+  userId: number
+): Promise<{ interested: boolean; count: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+
+  const existing = await db
+    .select({ id: pointInterests.id })
+    .from(pointInterests)
+    .where(
+      and(
+        eq(pointInterests.eventId, eventId),
+        eq(pointInterests.rallyPointCandidateId, rallyPointCandidateId),
+        eq(pointInterests.userId, userId)
+      )
+    )
+    .limit(1);
+
+  let interested: boolean;
+  if (existing.length > 0) {
+    await db.delete(pointInterests).where(eq(pointInterests.id, existing[0].id));
+    interested = false;
+  } else {
+    try {
+      await db.insert(pointInterests).values({ eventId, rallyPointCandidateId, userId });
+      interested = true;
+    } catch (error) {
+      if (isDuplicateKeyError(error)) {
+        interested = true;
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  const counts = await getPointInterestCounts(eventId);
+  return { interested, count: counts.get(rallyPointCandidateId) ?? 0 };
+}
+
+/** Interest counts per candidate for one event. */
+export async function getPointInterestCounts(eventId: number): Promise<Map<number, number>> {
+  const map = new Map<number, number>();
+  const db = await getDb();
+  if (!db) return map;
+  const rows = await db
+    .select({ candidateId: pointInterests.rallyPointCandidateId, count: sql<number>`count(*)` })
+    .from(pointInterests)
+    .where(eq(pointInterests.eventId, eventId))
+    .groupBy(pointInterests.rallyPointCandidateId);
+  for (const row of rows) map.set(row.candidateId, Number(row.count));
+  return map;
+}
+
+/** Candidate ids this user has +1'd for an event (for myInterested flags). */
+export async function getInterestedCandidateIds(eventId: number, userId: number): Promise<Set<number>> {
+  const set = new Set<number>();
+  const db = await getDb();
+  if (!db) return set;
+  const rows = await db
+    .select({ candidateId: pointInterests.rallyPointCandidateId })
+    .from(pointInterests)
+    .where(and(eq(pointInterests.eventId, eventId), eq(pointInterests.userId, userId)));
+  for (const row of rows) set.add(row.candidateId);
+  return set;
 }
 
 export async function createEvent(data: InsertEvent): Promise<number> {

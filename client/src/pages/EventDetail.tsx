@@ -13,6 +13,7 @@ import { ArrowLeft, Bus, Calendar, MapPin } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { MapView, createArrivalMarker, createBoardingPointMarker } from "@/components/Map";
 import { HeartButton } from "@/components/HeartButton";
+import { PointInterestSection } from "@/components/PointInterestSection";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 interface Props {
@@ -318,6 +319,8 @@ export default function EventDetailPage({ id }: Props) {
               </Button>
             </div>
           )}
+
+          <PointInterestSection eventId={event.id} />
         </div>
       </div>
 

@@ -37,9 +37,11 @@ import {
   getLikedEventsByUser,
   getLatestPaymentByRideRequestId,
   getPaidPaymentItemTotalsByType,
+  getInterestedCandidateIds,
   getPaymentByOrderId,
   getPaymentItemsByPaymentId,
   getPendingRideRequestsByEventId,
+  getPointInterestCounts,
   getPointsByUserId,
   getReferralByReservationId,
   getReferralsByUserId,
@@ -55,6 +57,7 @@ import {
   getUserByReferralCode,
   setStopCandidateActive,
   toggleEventLike,
+  togglePointInterest,
   updateBoardingPoint,
   updateEvent,
   updateEventStatus,
@@ -73,6 +76,7 @@ import {
 } from "./payments";
 import { finalizeReservation, finalizeRideRequest, maybeConfirmTrip, validatePointsUsage, type TossOrderContext } from "./reservationFlow";
 import { auditLog } from "./audit";
+import { filterUnservedCandidates } from "./pointInterests";
 import { cancelTossPayment, confirmTossPayment, isTossEnabled, TossApiError } from "./toss";
 import { nanoid } from "nanoid";
 import { buildDemandGrid, summarizeNearbyDemand } from "./demand";
@@ -1071,6 +1075,44 @@ export const appRouter = router({
   // ─── Rally Point Candidates (community-sourced, unverified pickup spots) ─────
   rallyPointCandidates: router({
     list: publicProcedure.query(() => getActiveRallyPointCandidates()),
+  }),
+
+  // ─── Point Interests (+1 여기서 출발 원해요) ──────────────────────────────────
+  // 결제·입력 없는 수요 신호: 다음 트립을 어디 깔지 판단할 운영 데이터.
+  pointInterests: router({
+    // 이벤트별 후보 목록 + 관심 수 + 내 관심 여부. 이미 셔틀이 서는
+    // 정류장(기존 탑승 포인트 반경 내)과 겹치는 후보는 제외한다.
+    byEvent: publicProcedure
+      .input(z.object({ eventId: z.number() }))
+      .query(async ({ input, ctx }) => {
+        const event = await getEventById(input.eventId);
+        if (!event) throw new TRPCError({ code: "NOT_FOUND" });
+
+        const [candidates, eventBoardingPoints, counts, mine] = await Promise.all([
+          getActiveRallyPointCandidates(),
+          getBoardingPointsByEventId(input.eventId),
+          getPointInterestCounts(input.eventId),
+          ctx.user ? getInterestedCandidateIds(input.eventId, ctx.user.id) : Promise.resolve(new Set<number>()),
+        ]);
+
+        return filterUnservedCandidates(candidates, eventBoardingPoints).map((c) => ({
+          id: c.id,
+          name: c.name,
+          region: c.region,
+          count: counts.get(c.id) ?? 0,
+          myInterested: mine.has(c.id),
+        }));
+      }),
+
+    // 멱등 토글. 하트와 마찬가지로 연타가 정상 사용이라 쓰기뮤테이션
+    // 리밋에 넣지 않는다 (전역 100/min만).
+    toggle: protectedProcedure
+      .input(z.object({ eventId: z.number(), rallyPointCandidateId: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const event = await getEventById(input.eventId);
+        if (!event) throw new TRPCError({ code: "NOT_FOUND" });
+        return togglePointInterest(input.eventId, input.rallyPointCandidateId, ctx.user.id);
+      }),
   }),
 
   // ─── Admin ─────────────────────────────────────────────────────────────────

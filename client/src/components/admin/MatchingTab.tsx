@@ -251,6 +251,8 @@ export function MatchingTab() {
           {preview && (
             <PreviewResult preview={preview} venue={selectedEvent ? { lat: Number(selectedEvent.lat), lng: Number(selectedEvent.lng) } : undefined} />
           )}
+
+          <PointInterestRanking eventId={selectedEventId} />
         </>
       )}
 
@@ -442,6 +444,30 @@ function PreviewResult({
           매칭 실패 {preview.failedRequestIds.length}건 (요청 ID: {preview.failedRequestIds.join(", ")})
         </div>
       )}
+    </div>
+  );
+}
+
+// "+1 여기서 출발 원해요" 수요 신호: 후보별 관심 수 내림차순. 다음 트립을
+// 어디 깔지 판단하는 운영 데이터.
+function PointInterestRanking({ eventId }: { eventId: number }) {
+  const { data: candidates } = trpc.pointInterests.byEvent.useQuery({ eventId });
+  const ranked = (candidates ?? []).filter((c) => c.count > 0).sort((a, b) => b.count - a.count);
+
+  if (ranked.length === 0) return null;
+
+  return (
+    <div className="rounded-xl border border-border p-4">
+      <h3 className="text-sm font-semibold mb-2">출발지 수요 신호 (+1)</h3>
+      <div className="space-y-1">
+        {ranked.map((c, idx) => (
+          <div key={c.id} className="flex items-center gap-2 text-sm">
+            <span className="w-5 text-xs text-muted-foreground tabular-nums">{idx + 1}.</span>
+            <span className="min-w-0 flex-1 truncate">{c.name} <span className="text-xs text-muted-foreground">· {c.region}</span></span>
+            <span className="font-semibold tabular-nums">🙋 {c.count}명</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

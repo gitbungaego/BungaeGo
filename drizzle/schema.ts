@@ -108,6 +108,32 @@ export const eventLikes = mysqlTable(
 export type EventLike = typeof eventLikes.$inferSelect;
 export type InsertEventLike = typeof eventLikes.$inferInsert;
 
+// ─── Point Interests (+1 여기서 출발 원해요) ────────────────────────────────────
+// One row per (event, rally point candidate, user): a no-payment demand signal
+// for where the next trip should be routed. Same pattern as event_likes —
+// counts are COUNT() aggregates, and the unique index makes the toggle
+// idempotent at the DB level.
+export const pointInterests = mysqlTable(
+  "point_interests",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    eventId: int("eventId").notNull(),
+    rallyPointCandidateId: int("rallyPointCandidateId").notNull(),
+    userId: int("userId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("point_interests_event_candidate_user_idx").on(
+      table.eventId,
+      table.rallyPointCandidateId,
+      table.userId
+    ),
+  ]
+);
+
+export type PointInterest = typeof pointInterests.$inferSelect;
+export type InsertPointInterest = typeof pointInterests.$inferInsert;
+
 // ─── Trips (Shuttles) ─────────────────────────────────────────────────────────
 export const TRIP_CANCEL_REASONS = ["admin_cancel", "min_count_not_met"] as const;
 export type TripCancelReason = (typeof TRIP_CANCEL_REASONS)[number];
