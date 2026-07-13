@@ -100,7 +100,7 @@ curl -s -o /dev/null -w "%{http_code}\n" "https://bungaego.com/api/oauth/kakao/l
 | 0016 | zippy_hulk | `point_interests` 테이블 (UNIQUE(eventId,rallyPointCandidateId,userId)) | 적용됨 |
 | 0017 | overrated_sleeper | 번개팅 `bungaeting_profiles`, `bungaeting_preferences` 테이블 | 적용됨(실측 2026-07-13). 스키마만 배포, 기능은 FEATURE_BUNGAETING OFF라 미노출 |
 | 0018 | amazing_vindicator | trips: `cancelReason` enum에 `gender_ratio_not_met` 추가 (번개팅 성비 미달 자동취소, 순수 추가형) | 적용됨(실측 2026-07-13) |
-| 0019 | absent_shadow_king | trips: `openChatUrl` varchar(500) 추가 (번개팅 회차 카카오 오픈채팅 링크, nullable 순수 추가형) | **미적용(프로덕션)** — 로컬 dev만. 번개팅 배포 시 적용 |
+| 0019 | absent_shadow_king | trips: `openChatUrl` varchar(500) 추가 (번개팅 회차 카카오 오픈채팅 링크, nullable 순수 추가형) | 적용됨(실측 2026-07-14) |
 
 > **번개팅 배포 상태 (2026-07-13)**: 스키마(0017·0018)와 코드는 프로덕션에 올라갔지만
 > `FEATURE_BUNGAETING`/`VITE_FEATURE_BUNGAETING` 환경변수를 Railway에 **설정하지 않아** 기능은
