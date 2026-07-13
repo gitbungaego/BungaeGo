@@ -465,3 +465,67 @@ export const consents = mysqlTable(
 
 export type Consent = typeof consents.$inferSelect;
 export type InsertConsent = typeof consents.$inferInsert;
+
+// ─── Bungaeting (동행·친목 서브서비스) ──────────────────────────────────────────
+// 소개팅·매칭이 아니라 "함께 탄 사람끼리 어울리는" 동행 서비스 (spec §1, §4 참고).
+// 프로필(사진·나이·성별)은 번개고 대절 데이터와 분리 저장 — 조인 키(userId)만 유지 (spec §5).
+
+export const GENDERS = ["M", "F"] as const;
+export type Gender = (typeof GENDERS)[number];
+
+// 성비 모드 4종 (spec §2): 일반(무조정)/반반(남녀 동수)/여성 전용/남성 전용.
+// trips.themeConfig(번개팅 회차)와 선호 등록 양쪽에서 쓰는 단일 소스.
+export const GENDER_MODES = ["any", "half", "female_only", "male_only"] as const;
+export type GenderMode = (typeof GENDER_MODES)[number];
+
+export const BUNGAETING_PROFILE_STATUSES = ["active", "blinded", "restricted"] as const;
+export type BungaetingProfileStatus = (typeof BUNGAETING_PROFILE_STATUSES)[number];
+
+export const bungaetingProfiles = mysqlTable(
+  "bungaeting_profiles",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("userId").notNull(),
+    nickname: varchar("nickname", { length: 30 }).notNull(),
+    // TODO(R2): 현재는 URL 입력/미사용. 실제 업로드는 스토리지(R2) 연동 후 (spec §5, §7).
+    photoUrl: text("photoUrl"),
+    bio: varchar("bio", { length: 200 }),
+    // 성별·생년월일은 본인인증 결과로 채운다 (사용자 자유 입력이 아님).
+    gender: mysqlEnum("gender", GENDERS).notNull(),
+    // mode:"string" — 'YYYY-MM-DD'로 그대로 저장/조회해 만 나이 계산 시 TZ 왜곡 방지.
+    birthDate: date("birthDate", { mode: "string" }).notNull(),
+    // 본인인증: 계약 전에는 mock 어댑터(provider='mock'). TODO: 포트원 연동 (spec §7).
+    verifiedAt: timestamp("verifiedAt"),
+    verificationProvider: varchar("verificationProvider", { length: 50 }),
+    // 번개팅 별도 이용약관 동의 시각 (spec §3-2, 필수).
+    tosAgreedAt: timestamp("tosAgreedAt"),
+    status: mysqlEnum("status", BUNGAETING_PROFILE_STATUSES).default("active").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [uniqueIndex("bungaeting_profiles_user_idx").on(table.userId)]
+);
+
+export type BungaetingProfile = typeof bungaetingProfiles.$inferSelect;
+export type InsertBungaetingProfile = typeof bungaetingProfiles.$inferInsert;
+
+// 선호 등록: 조건에 맞는 회차가 열리면 SMS 알림 (spec §2, §6). 알림은 mock(console.log).
+export const bungaetingPreferences = mysqlTable(
+  "bungaeting_preferences",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("userId").notNull(),
+    preferredGenderMode: mysqlEnum("preferredGenderMode", GENDER_MODES),
+    preferredAgeMin: int("preferredAgeMin"),
+    preferredAgeMax: int("preferredAgeMax"),
+    preferredRegion: varchar("preferredRegion", { length: 100 }),
+    preferredTheme: varchar("preferredTheme", { length: 100 }),
+    smsOptIn: boolean("smsOptIn").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [uniqueIndex("bungaeting_preferences_user_idx").on(table.userId)]
+);
+
+export type BungaetingPreference = typeof bungaetingPreferences.$inferSelect;
+export type InsertBungaetingPreference = typeof bungaetingPreferences.$inferInsert;

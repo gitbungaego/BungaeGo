@@ -1,0 +1,139 @@
+import { TRPCError } from "@trpc/server";
+import { z } from "zod";
+import { calculateAge } from "@shared/bungaeting/age";
+import { GENDERS, GENDER_MODES } from "../../drizzle/schema";
+import {
+  createBungaetingProfile,
+  getBungaetingPreferenceByUserId,
+  getBungaetingProfileByUserId,
+  upsertBungaetingPreference,
+} from "../db";
+import { CONSENT_VERSIONS, recordConsent } from "../consents";
+import { isEnabled } from "../featureFlags";
+import { protectedProcedure, router } from "../_core/trpc";
+import { verificationAdapter } from "./verification";
+
+// 성인 기준 만 나이 (spec §3-2 성인 필수). 미성년자 유입 차단은 서비스 안전의 근간.
+const ADULT_AGE = 19;
+
+// 번개팅 전체 기능 게이트. FEATURE_BUNGAETING=true일 때만 동작(기본 OFF, spec §7).
+// 미충족 상태로 실사용자에게 노출되지 않도록 라우터 진입점에서 막는다.
+export const bungaetingProcedure = protectedProcedure.use(({ ctx, next }) => {
+  if (!isEnabled("bungaeting")) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "번개팅 서비스가 활성화되지 않았습니다.",
+    });
+  }
+  return next({ ctx });
+});
+
+const BIRTHDATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+export const bungaetingRouter = router({
+  // ── 프로필 / 온보딩 ──────────────────────────────────────────────────────────
+  profile: router({
+    // 내 번개팅 프로필 (없으면 null → 클라이언트가 온보딩으로 유도).
+    me: bungaetingProcedure.query(async ({ ctx }) => {
+      const profile = await getBungaetingProfileByUserId(ctx.user.id);
+      return profile ?? null;
+    }),
+
+    // 최초 1회 온보딩: mock 본인인증 → 프로필 생성 + 번개팅 약관 동의 기록.
+    onboard: bungaetingProcedure
+      .input(
+        z.object({
+          nickname: z.string().min(1).max(30),
+          bio: z.string().max(200).optional(),
+          // TODO(R2): 실제 업로드 전까지는 URL 입력/미사용 (spec §5, §7).
+          photoUrl: z.string().max(1000).optional(),
+          gender: z.enum(GENDERS),
+          birthDate: z.string().regex(BIRTHDATE_RE, "생년월일은 YYYY-MM-DD 형식이어야 합니다."),
+          // 번개팅 별도 약관 동의 필수 — 미동의 시 가입 불가 (spec §3-2).
+          agreeTos: z.literal(true),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const existing = await getBungaetingProfileByUserId(ctx.user.id);
+        if (existing) {
+          throw new TRPCError({ code: "CONFLICT", message: "이미 번개팅 프로필이 있습니다." });
+        }
+
+        // 유효한 날짜인지 확인 (정규식만으로는 2026-13-40 같은 값을 못 막는다).
+        const parsed = new Date(`${input.birthDate}T00:00:00Z`);
+        if (Number.isNaN(parsed.getTime()) || input.birthDate !== parsed.toISOString().slice(0, 10)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "유효하지 않은 생년월일입니다." });
+        }
+
+        // mock 본인인증. 실제 어댑터는 인증 기관에서 성별/생년월일을 받아오므로
+        // 여기서 클라이언트 입력을 그대로 신뢰하지 않게 된다 (TODO: 포트원).
+        const verification = await verificationAdapter.verify({
+          gender: input.gender,
+          birthDate: input.birthDate,
+        });
+
+        const age = calculateAge(verification.birthDate, new Date());
+        if (age < ADULT_AGE) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "번개팅은 성인만 이용할 수 있습니다.",
+          });
+        }
+
+        const now = new Date();
+        const id = await createBungaetingProfile({
+          userId: ctx.user.id,
+          nickname: input.nickname,
+          bio: input.bio,
+          photoUrl: input.photoUrl,
+          gender: verification.gender,
+          birthDate: verification.birthDate,
+          verifiedAt: verification.verifiedAt,
+          verificationProvider: verification.provider,
+          tosAgreedAt: now,
+          status: "active",
+        });
+
+        await recordConsent(ctx.user.id, "bungaeting_tos", CONSENT_VERSIONS.bungaeting_tos);
+        return { id };
+      }),
+  }),
+
+  // ── 선호 등록 (조건 맞는 회차 오픈 시 SMS 알림용, spec §2) ──────────────────────
+  preferences: router({
+    get: bungaetingProcedure.query(async ({ ctx }) => {
+      const pref = await getBungaetingPreferenceByUserId(ctx.user.id);
+      return pref ?? null;
+    }),
+
+    upsert: bungaetingProcedure
+      .input(
+        z.object({
+          preferredGenderMode: z.enum(GENDER_MODES).nullable().optional(),
+          preferredAgeMin: z.number().int().min(0).max(120).nullable().optional(),
+          preferredAgeMax: z.number().int().min(0).max(120).nullable().optional(),
+          preferredRegion: z.string().max(100).nullable().optional(),
+          preferredTheme: z.string().max(100).nullable().optional(),
+          smsOptIn: z.boolean(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        if (
+          input.preferredAgeMin != null &&
+          input.preferredAgeMax != null &&
+          input.preferredAgeMin > input.preferredAgeMax
+        ) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "나이 범위가 올바르지 않습니다." });
+        }
+        await upsertBungaetingPreference(ctx.user.id, {
+          preferredGenderMode: input.preferredGenderMode ?? null,
+          preferredAgeMin: input.preferredAgeMin ?? null,
+          preferredAgeMax: input.preferredAgeMax ?? null,
+          preferredRegion: input.preferredRegion ?? null,
+          preferredTheme: input.preferredTheme ?? null,
+          smsOptIn: input.smsOptIn,
+        });
+        return { success: true } as const;
+      }),
+  }),
+});

@@ -81,6 +81,7 @@ import { cancelTossPayment, confirmTossPayment, isTossEnabled, TossApiError } fr
 import { nanoid } from "nanoid";
 import { buildDemandGrid, summarizeNearbyDemand } from "./demand";
 import { CONSENT_VERSIONS, recordConsent } from "./consents";
+import { bungaetingRouter } from "./bungaeting/router";
 import { isThemeAllowed } from "./featureFlags";
 import { getPolicy } from "./matching/confirmPolicy";
 import { notifyEventCancellation, notifyTrip } from "./notify/tripMessenger";
@@ -124,6 +125,9 @@ export { getMatchingStopCandidates, RALLY_POINT_CANDIDATE_ID_OFFSET };
 
 export const appRouter = router({
   system: systemRouter,
+
+  // 번개팅(동행·친목 서브서비스). 전체가 FEATURE_BUNGAETING 플래그 뒤에 있음(기본 OFF).
+  bungaeting: bungaetingRouter,
 
   // ─── Auth ──────────────────────────────────────────────────────────────────
   auth: router({

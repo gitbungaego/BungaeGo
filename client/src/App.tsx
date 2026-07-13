@@ -17,6 +17,11 @@ import { TossPaymentFailPage, TossPaymentSuccessPage } from "./pages/TossPayment
 import CreatePage from "./pages/Create";
 import MyPage from "./pages/MyPage";
 import AdminPage from "./pages/Admin";
+import BungaetingLayout from "./components/bungaeting/BungaetingLayout";
+import BungaetingHome from "./pages/bungaeting/Home";
+import BungaetingOnboarding from "./pages/bungaeting/Onboarding";
+import BungaetingPreferences from "./pages/bungaeting/Preferences";
+import BungaetingMe from "./pages/bungaeting/Me";
 
 function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -64,6 +69,19 @@ function Router() {
       </Route>
       <Route path="/admin">
         <Layout><AdminPage /></Layout>
+      </Route>
+      {/* 번개팅(동행·친목) — 옐로 톤 서브 레이아웃 + 하단 탭. 회차/제안은 이후 단계. */}
+      <Route path="/bungaeting">
+        <BungaetingLayout><BungaetingHome /></BungaetingLayout>
+      </Route>
+      <Route path="/bungaeting/onboarding">
+        <BungaetingLayout><BungaetingOnboarding /></BungaetingLayout>
+      </Route>
+      <Route path="/bungaeting/preferences">
+        <BungaetingLayout><BungaetingPreferences /></BungaetingLayout>
+      </Route>
+      <Route path="/bungaeting/me">
+        <BungaetingLayout><BungaetingMe /></BungaetingLayout>
       </Route>
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />

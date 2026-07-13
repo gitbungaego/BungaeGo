@@ -21,6 +21,10 @@ export default function Navbar() {
   const navLinks = [
     { href: "/events", label: "이벤트" },
     { href: "/create", label: "셔틀 만들기" },
+    // 번개팅(동행·친목)은 기능 플래그 뒤에 있음 — 기본 숨김.
+    ...(import.meta.env.VITE_FEATURE_BUNGAETING === "true"
+      ? [{ href: "/bungaeting", label: "번개팅" }]
+      : []),
   ];
 
   const isActive = (href: string) => location.startsWith(href);

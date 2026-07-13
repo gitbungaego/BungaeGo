@@ -3,11 +3,15 @@ import { drizzle } from "drizzle-orm/mysql2";
 import { createPool, type PoolOptions } from "mysql2/promise";
 import {
   BoardingPoint,
+  BungaetingPreference,
+  BungaetingProfile,
   ChargeType,
   Cluster,
   Consent,
   Event,
   InsertBoardingPoint,
+  InsertBungaetingPreference,
+  InsertBungaetingProfile,
   InsertCluster,
   InsertConsent,
   InsertEvent,
@@ -34,6 +38,8 @@ import {
   User,
   UserStatus,
   boardingPoints,
+  bungaetingPreferences,
+  bungaetingProfiles,
   clusters,
   consents,
   eventLikes,
@@ -1813,4 +1819,74 @@ export async function getLatestConsentByUserAndType(
     .orderBy(desc(consents.id))
     .limit(1);
   return rows[0];
+}
+
+// ─── Bungaeting: profiles & preferences ────────────────────────────────────────
+export async function getBungaetingProfileByUserId(
+  userId: number
+): Promise<BungaetingProfile | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(bungaetingProfiles)
+    .where(eq(bungaetingProfiles.userId, userId))
+    .limit(1);
+  return rows[0];
+}
+
+export async function getBungaetingProfilesByUserIds(
+  userIds: number[]
+): Promise<BungaetingProfile[]> {
+  const db = await getDb();
+  if (!db || userIds.length === 0) return [];
+  return db
+    .select()
+    .from(bungaetingProfiles)
+    .where(inArray(bungaetingProfiles.userId, userIds));
+}
+
+export async function createBungaetingProfile(
+  data: InsertBungaetingProfile
+): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const result = await db.insert(bungaetingProfiles).values(data);
+  return (result[0] as any).insertId;
+}
+
+export async function updateBungaetingProfile(
+  userId: number,
+  data: Partial<InsertBungaetingProfile>
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(bungaetingProfiles).set(data).where(eq(bungaetingProfiles.userId, userId));
+}
+
+export async function getBungaetingPreferenceByUserId(
+  userId: number
+): Promise<BungaetingPreference | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(bungaetingPreferences)
+    .where(eq(bungaetingPreferences.userId, userId))
+    .limit(1);
+  return rows[0];
+}
+
+// 선호 등록은 유저당 1건 — 있으면 갱신, 없으면 삽입. userId UNIQUE 인덱스로
+// onDuplicateKeyUpdate가 원자적으로 한 행만 유지한다.
+export async function upsertBungaetingPreference(
+  userId: number,
+  data: Omit<InsertBungaetingPreference, "id" | "userId">
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .insert(bungaetingPreferences)
+    .values({ ...data, userId })
+    .onDuplicateKeyUpdate({ set: { ...data } });
 }
