@@ -22,6 +22,7 @@ import BungaetingHome from "./pages/bungaeting/Home";
 import BungaetingOnboarding from "./pages/bungaeting/Onboarding";
 import BungaetingPreferences from "./pages/bungaeting/Preferences";
 import BungaetingMe from "./pages/bungaeting/Me";
+import BungaetingTripDetail from "./pages/bungaeting/TripDetail";
 
 function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -82,6 +83,9 @@ function Router() {
       </Route>
       <Route path="/bungaeting/me">
         <BungaetingLayout><BungaetingMe /></BungaetingLayout>
+      </Route>
+      <Route path="/bungaeting/trips/:id">
+        {(params) => <BungaetingLayout><BungaetingTripDetail id={Number(params.id)} /></BungaetingLayout>}
       </Route>
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />

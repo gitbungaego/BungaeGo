@@ -7,6 +7,7 @@ import {
   getActiveBungaetingTrips,
   getBungaetingPreferenceByUserId,
   getBungaetingProfileByUserId,
+  getBungaetingProfilesByUserIds,
   getReservationsWithPaymentsByTripId,
   getTripById,
   upsertBungaetingPreference,
@@ -35,6 +36,16 @@ export const bungaetingProcedure = protectedProcedure.use(({ ctx, next }) => {
 });
 
 const BIRTHDATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// 참가자 공개 뷰 — 노출 허용 필드로 타입을 좁혀 프로필 전체 객체가 새는 걸 원천 차단.
+// (실명·birthDate·gender 원본·userId·연락처·verifiedAt 등은 이 타입에 없음, spec §4-2)
+interface ParticipantView {
+  nickname: string;
+  photoUrl: string | null;
+  bio: string | null;
+  blinded: boolean;
+  isMe: boolean;
+}
 
 // 번개팅 회차 잔여석 계산 — 반반 모드는 성별 맵으로 byGroup("남 N·여 M") 분리.
 async function withBungaetingAvailability(trip: Trip) {
@@ -197,6 +208,49 @@ export const bungaetingRouter = router({
           maxCount: trip.maxCount,
           ...(await withBungaetingAvailability(trip)),
         };
+      }),
+
+    // ── 참가자 프로필 공개 (spec §3-4, §4-3) — 가장 민감한 데이터 노출 지점 ──────
+    // 3중 서버 검증: (a) 로그인(bungaetingProcedure=protected → 비로그인 UNAUTHORIZED)
+    //   (b) 그 트립의 유효(비취소) 예약자 본인  (c) 트립이 confirmed(D-5 확정 후).
+    // 하나라도 불충족이면 프로필을 일절 반환하지 않는다. tripId만 아는 외부인/비예약자/
+    // 취소자/미확정 시점에는 nickname·photo조차 새면 안 된다.
+    participants: bungaetingProcedure
+      .input(z.object({ tripId: z.number() }))
+      .query(async ({ input, ctx }): Promise<ParticipantView[]> => {
+        const trip = await getTripById(input.tripId);
+        if (!trip || trip.theme !== "bungaeting") {
+          throw new TRPCError({ code: "NOT_FOUND", message: "번개팅 회차를 찾을 수 없습니다." });
+        }
+
+        const reservations = await getReservationsWithPaymentsByTripId(input.tripId);
+        const activeUserIds = new Set(
+          reservations.filter((r) => r.status !== "cancelled").map((r) => r.userId)
+        );
+
+        // (b) 요청자가 이 트립의 유효 예약자 본인인가? (조인으로 확인 — tripId만으론 불충분)
+        if (!activeUserIds.has(ctx.user.id)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "이 회차의 참가자만 볼 수 있습니다." });
+        }
+
+        // (c) 확정(D-5) 후에만 공개 — 결제·확정 전 프로필 쇼핑 금지 (spec §4-3).
+        if (trip.status !== "confirmed") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "참가자 정보는 회차 확정 후 공개됩니다." });
+        }
+
+        const profiles = await getBungaetingProfilesByUserIds(Array.from(activeUserIds));
+        // status 필터: restricted는 목록 제외, blinded는 사진/소개 가림 (spec §4-4, §신고).
+        // 반환은 nickname/photoUrl/bio + isMe/blinded 파생 플래그만 — 실명·생년월일·성별·
+        // userId·연락처·verifiedAt 등 민감 필드는 절대 포함하지 않는다 (spec §4-2).
+        return profiles
+          .filter((p) => p.status !== "restricted")
+          .map((p) => ({
+            nickname: p.nickname,
+            photoUrl: p.status === "blinded" ? null : p.photoUrl,
+            bio: p.status === "blinded" ? null : p.bio,
+            blinded: p.status === "blinded",
+            isMe: p.userId === ctx.user.id,
+          }));
       }),
   }),
 });

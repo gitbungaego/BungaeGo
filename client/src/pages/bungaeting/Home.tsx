@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
@@ -68,10 +68,10 @@ export default function BungaetingHome() {
       ) : (
         <div className="space-y-3">
           {trips.map((t) => (
-            /* 상세·신청 페이지는 이후 단계(§3 확정·신청/§4 프로필 공개)에서 연결 */
-            <div
+            <Link
               key={t.id}
-              className="block rounded-xl border border-border bg-white p-4"
+              href={`/bungaeting/trips/${t.id}`}
+              className="block rounded-xl border border-border bg-white p-4 hover:border-[#FEE500] transition-colors"
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -104,7 +104,7 @@ export default function BungaetingHome() {
                   <span>잔여 {t.availability.remaining}석</span>
                 )}
               </div>
-            </div>
+            </Link>
           ))}
         </div>
       )}
