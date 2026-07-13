@@ -168,6 +168,9 @@ export const trips = mysqlTable("trips", {
   sourceClusterId: int("sourceClusterId"),
   theme: varchar("theme", { length: 20 }).default("standard").notNull(),
   themeConfig: json("themeConfig"),
+  // 번개팅 회차 카카오 오픈채팅방 링크 (spec §3-6, 축소판). 관리자가 확정 시 입력.
+  // 인앱 채팅 대신 외부 오픈채팅으로 운영 — 확정 참가자에게만 노출. 표준 트립은 미사용.
+  openChatUrl: varchar("openChatUrl", { length: 500 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

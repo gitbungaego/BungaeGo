@@ -4,7 +4,7 @@ import { getLoginUrl } from "@/const";
 import { Button } from "@/components/ui/button";
 import { GENDER_MODE_LABELS } from "@/lib/bungaeting";
 import { formatDateTime, formatPrice } from "@/lib/constants";
-import { EyeOff, Lock, Users } from "lucide-react";
+import { EyeOff, Lock, MessageSquare, Users } from "lucide-react";
 
 // 번개팅 회차 상세 (spec §3-3, §3-4). 참가자 프로필은 확정 트립의 유효 예약자에게만
 // 공개된다 — 접근제어는 서버(bungaeting.trips.participants)가 강제하고, 여기선 그 결과를
@@ -19,6 +19,12 @@ export default function BungaetingTripDetail({ id }: { id: number }) {
 
   const isConfirmed = trip?.status === "confirmed";
   const participantsQuery = trpc.bungaeting.trips.participants.useQuery(
+    { tripId: id },
+    { enabled: isAuthenticated && isConfirmed, retry: false }
+  );
+
+  // 오픈채팅 링크는 서버가 확정 참가자에게만 반환 (participants와 동일 접근제어).
+  const openChatQuery = trpc.bungaeting.trips.openChat.useQuery(
     { tripId: id },
     { enabled: isAuthenticated && isConfirmed, retry: false }
   );
@@ -118,6 +124,21 @@ export default function BungaetingTripDetail({ id }: { id: number }) {
           </div>
         )}
       </section>
+
+      {/* 카카오 오픈채팅방 입장 — 확정 참가자 + 관리자가 링크를 입력한 경우에만.
+          채팅은 외부 카카오 오픈채팅으로 운영, 플랫폼은 링크만 제공 (spec §3-6 축소판). */}
+      {isConfirmed && openChatQuery.data?.openChatUrl && (
+        <Button asChild className="w-full gap-1.5 bg-[#FEE500] hover:bg-[#FDD800] text-black border-0">
+          <a href={openChatQuery.data.openChatUrl} target="_blank" rel="noopener">
+            <MessageSquare className="h-4 w-4" /> 회차 오픈채팅방 입장
+          </a>
+        </Button>
+      )}
+      {isConfirmed && openChatQuery.data && !openChatQuery.data.openChatUrl && (
+        <p className="text-center text-xs text-muted-foreground">
+          오픈채팅방 링크는 준비되는 대로 안내드려요.
+        </p>
+      )}
     </div>
   );
 }

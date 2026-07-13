@@ -442,6 +442,22 @@ describe("tripMessenger", () => {
     expect(message.body).toContain("아이유 콘서트");
   });
 
+  it("buildTripMessage: tripConfirmed에 오픈채팅 링크가 있으면 안내에 포함, 없으면 미포함", () => {
+    const withLink = buildTripMessage("tripConfirmed", {
+      eventTitle: "번개팅 회차",
+      departureAt: new Date("2026-08-01T09:00:00+09:00"),
+      openChatUrl: "https://open.kakao.com/o/abc123",
+    });
+    expect(withLink.body).toContain("https://open.kakao.com/o/abc123");
+
+    const withoutLink = buildTripMessage("tripConfirmed", {
+      eventTitle: "일반 셔틀",
+      departureAt: new Date("2026-08-01T09:00:00+09:00"),
+      openChatUrl: null,
+    });
+    expect(withoutLink.body).not.toContain("오픈채팅");
+  });
+
   it("buildTripMessage: departureReminder includes the boarding point when given", () => {
     const withStop = buildTripMessage("departureReminder", {
       departureAt: new Date(),

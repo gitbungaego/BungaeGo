@@ -14,26 +14,15 @@ import {
 } from "../db";
 import type { Trip } from "../../drizzle/schema";
 import { CONSENT_VERSIONS, recordConsent } from "../consents";
-import { isEnabled } from "../featureFlags";
 import { getPolicy } from "../matching/confirmPolicy";
-import { protectedProcedure, router } from "../_core/trpc";
+import { router } from "../_core/trpc";
+import { loadConfirmedTripMembership } from "./access";
+import { bungaetingProcedure } from "./procedure";
 import { buildGenderMap, parseBungaetingConfig } from "./policy";
 import { verificationAdapter } from "./verification";
 
 // 성인 기준 만 나이 (spec §3-2 성인 필수). 미성년자 유입 차단은 서비스 안전의 근간.
 const ADULT_AGE = 19;
-
-// 번개팅 전체 기능 게이트. FEATURE_BUNGAETING=true일 때만 동작(기본 OFF, spec §7).
-// 미충족 상태로 실사용자에게 노출되지 않도록 라우터 진입점에서 막는다.
-export const bungaetingProcedure = protectedProcedure.use(({ ctx, next }) => {
-  if (!isEnabled("bungaeting")) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: "번개팅 서비스가 활성화되지 않았습니다.",
-    });
-  }
-  return next({ ctx });
-});
 
 const BIRTHDATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -218,25 +207,8 @@ export const bungaetingRouter = router({
     participants: bungaetingProcedure
       .input(z.object({ tripId: z.number() }))
       .query(async ({ input, ctx }): Promise<ParticipantView[]> => {
-        const trip = await getTripById(input.tripId);
-        if (!trip || trip.theme !== "bungaeting") {
-          throw new TRPCError({ code: "NOT_FOUND", message: "번개팅 회차를 찾을 수 없습니다." });
-        }
-
-        const reservations = await getReservationsWithPaymentsByTripId(input.tripId);
-        const activeUserIds = new Set(
-          reservations.filter((r) => r.status !== "cancelled").map((r) => r.userId)
-        );
-
-        // (b) 요청자가 이 트립의 유효 예약자 본인인가? (조인으로 확인 — tripId만으론 불충분)
-        if (!activeUserIds.has(ctx.user.id)) {
-          throw new TRPCError({ code: "FORBIDDEN", message: "이 회차의 참가자만 볼 수 있습니다." });
-        }
-
-        // (c) 확정(D-5) 후에만 공개 — 결제·확정 전 프로필 쇼핑 금지 (spec §4-3).
-        if (trip.status !== "confirmed") {
-          throw new TRPCError({ code: "FORBIDDEN", message: "참가자 정보는 회차 확정 후 공개됩니다." });
-        }
+        // 3중 검증(멤버십+확정)은 오픈채팅 링크 조회와 공용 (loadConfirmedTripMembership).
+        const { activeUserIds } = await loadConfirmedTripMembership(input.tripId, ctx.user.id);
 
         const profiles = await getBungaetingProfilesByUserIds(Array.from(activeUserIds));
         // status 필터: restricted는 목록 제외, blinded는 사진/소개 가림 (spec §4-4, §신고).
@@ -251,6 +223,17 @@ export const bungaetingRouter = router({
             blinded: p.status === "blinded",
             isMe: p.userId === ctx.user.id,
           }));
+      }),
+
+    // ── 카카오 오픈채팅 링크 (spec §3-6, 축소판) ─────────────────────────────────
+    // 인앱 채팅 대신 외부 카카오 오픈채팅으로 운영 — 플랫폼은 확정 참가자에게 링크만
+    // 제공한다. 프로필 공개(participants)와 동일한 3중 검증(loadConfirmedTripMembership)
+    // 으로 확정 트립의 유효 예약자에게만 링크를 반환한다. 비참가자/미확정엔 미노출.
+    openChat: bungaetingProcedure
+      .input(z.object({ tripId: z.number() }))
+      .query(async ({ input, ctx }): Promise<{ openChatUrl: string | null }> => {
+        const { trip } = await loadConfirmedTripMembership(input.tripId, ctx.user.id);
+        return { openChatUrl: trip.openChatUrl ?? null };
       }),
   }),
 });

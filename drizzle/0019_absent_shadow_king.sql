@@ -1,0 +1,1 @@
+ALTER TABLE `trips` ADD `openChatUrl` varchar(500);

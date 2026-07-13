@@ -18,6 +18,8 @@ interface ReservationConfirmedParams {
 interface TripConfirmedParams {
   eventTitle: string;
   departureAt: Date;
+  // 번개팅 회차 확정 시 카카오 오픈채팅 링크 (있을 때만 안내에 포함, spec §3-6 축소판).
+  openChatUrl?: string | null;
 }
 
 interface TripCancelledParams {
@@ -41,7 +43,9 @@ const TEMPLATES = {
   }),
   tripConfirmed: (p: TripConfirmedParams): TripMessage => ({
     title: "셔틀 확정 안내",
-    body: `[${p.eventTitle}] 셔틀 운행이 확정됐습니다. 출발: ${formatKoDateTime(p.departureAt)}. 확정 이후에는 취소 및 환불이 불가합니다.`,
+    body:
+      `[${p.eventTitle}] 셔틀 운행이 확정됐습니다. 출발: ${formatKoDateTime(p.departureAt)}. 확정 이후에는 취소 및 환불이 불가합니다.` +
+      (p.openChatUrl ? ` 회차 오픈채팅방: ${p.openChatUrl}` : ""),
   }),
   tripCancelled: (p: TripCancelledParams): TripMessage => ({
     title: "셔틀 운행 취소 안내",

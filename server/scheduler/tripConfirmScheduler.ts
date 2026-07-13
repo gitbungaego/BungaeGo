@@ -44,7 +44,8 @@ async function judgeTrip(trip: Trip, now: Date): Promise<void> {
     await notifyTrip(
       trip.id,
       "tripConfirmed",
-      { eventTitle: event?.title ?? "셔틀", departureAt: trip.departureAt },
+      // 번개팅 회차면 오픈채팅 링크를 확정 안내에 포함 (spec §3-6 축소판).
+      { eventTitle: event?.title ?? "셔틀", departureAt: trip.departureAt, openChatUrl: trip.openChatUrl },
       "all"
     ).catch((error) => console.warn("[tripConfirmScheduler] notifyTrip (confirmed) failed:", error));
     return;

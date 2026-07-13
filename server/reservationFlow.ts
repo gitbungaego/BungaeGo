@@ -60,7 +60,7 @@ export async function maybeConfirmTrip(tripId: number): Promise<void> {
   await notifyTrip(
     tripId,
     "tripConfirmed",
-    { eventTitle: event?.title ?? "셔틀", departureAt: trip.departureAt },
+    { eventTitle: event?.title ?? "셔틀", departureAt: trip.departureAt, openChatUrl: trip.openChatUrl },
     "all"
   ).catch((error) => console.warn("[maybeConfirmTrip] notifyTrip failed:", error));
 }

@@ -63,6 +63,9 @@ function profile(userId: number, o: Partial<BungaetingProfile> = {}): Bungaeting
 const call = (userId: number | null, tripId = 1) =>
   appRouter.createCaller(ctx(userId)).bungaeting.trips.participants({ tripId });
 
+const callOpenChat = (userId: number | null, tripId = 1) =>
+  appRouter.createCaller(ctx(userId)).bungaeting.trips.openChat({ tripId });
+
 beforeEach(() => { process.env.FEATURE_BUNGAETING = "true"; });
 afterEach(() => {
   delete process.env.FEATURE_BUNGAETING;
@@ -150,5 +153,31 @@ describe("bungaeting.trips.participants — blinded/restricted 상태 처리", (
     const list = await call(7);
     const blinded = list.find((p) => p.nickname === "닉2");
     expect(blinded).toMatchObject({ blinded: true, photoUrl: null, bio: null });
+  });
+});
+
+describe("bungaeting.trips.openChat — 오픈채팅 링크 접근제어 (참가자 공개와 동일 기준)", () => {
+  it("비참가자 → FORBIDDEN (링크 미노출)", async () => {
+    vi.mocked(db.getTripById).mockResolvedValue({ ...trip("confirmed"), openChatUrl: "https://open.kakao.com/o/abc" });
+    vi.mocked(db.getReservationsWithPaymentsByTripId).mockResolvedValue([res(1)]);
+    await expect(callOpenChat(99)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("미확정 트립은 참가자여도 → FORBIDDEN", async () => {
+    vi.mocked(db.getTripById).mockResolvedValue({ ...trip("collecting"), openChatUrl: "https://open.kakao.com/o/abc" });
+    vi.mocked(db.getReservationsWithPaymentsByTripId).mockResolvedValue([res(7)]);
+    await expect(callOpenChat(7)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("확정 트립의 유효 예약자 → 링크 반환", async () => {
+    vi.mocked(db.getTripById).mockResolvedValue({ ...trip("confirmed"), openChatUrl: "https://open.kakao.com/o/abc" });
+    vi.mocked(db.getReservationsWithPaymentsByTripId).mockResolvedValue([res(7)]);
+    await expect(callOpenChat(7)).resolves.toEqual({ openChatUrl: "https://open.kakao.com/o/abc" });
+  });
+
+  it("링크 미입력 회차는 null 반환 (참가자 확인은 통과)", async () => {
+    vi.mocked(db.getTripById).mockResolvedValue({ ...trip("confirmed"), openChatUrl: null });
+    vi.mocked(db.getReservationsWithPaymentsByTripId).mockResolvedValue([res(7)]);
+    await expect(callOpenChat(7)).resolves.toEqual({ openChatUrl: null });
   });
 });
