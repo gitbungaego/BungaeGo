@@ -101,13 +101,24 @@ curl -s -o /dev/null -w "%{http_code}\n" "https://bungaego.com/api/oauth/kakao/l
 | 0017 | overrated_sleeper | 번개팅 `bungaeting_profiles`, `bungaeting_preferences` 테이블 | 적용됨(실측 2026-07-13). 스키마만 배포, 기능은 FEATURE_BUNGAETING OFF라 미노출 |
 | 0018 | amazing_vindicator | trips: `cancelReason` enum에 `gender_ratio_not_met` 추가 (번개팅 성비 미달 자동취소, 순수 추가형) | 적용됨(실측 2026-07-13) |
 | 0019 | absent_shadow_king | trips: `openChatUrl` varchar(500) 추가 (번개팅 회차 카카오 오픈채팅 링크, nullable 순수 추가형) | 적용됨(실측 2026-07-14) |
-| 0020 | parallel_bastion | 번개팅 `bungaeting_trip_proposals`, `bungaeting_proposal_interests` 테이블 (회차 제안 + 찜) | **미적용(프로덕션)** — 로컬 dev만. 번개팅 배포 시 적용 |
-| 0021 | harsh_multiple_man | 번개팅 `bungaeting_reports` 테이블 (프로필 신고, 관리자 처리) | **미적용(프로덕션)** — 로컬 dev만. 번개팅 배포 시 적용 |
+| 0020 | parallel_bastion | 번개팅 `bungaeting_trip_proposals`, `bungaeting_proposal_interests` 테이블 (회차 제안 + 찜) | 적용됨(실측 2026-07-14) |
+| 0021 | harsh_multiple_man | 번개팅 `bungaeting_reports` 테이블 (프로필 신고, 관리자 처리) | 적용됨(실측 2026-07-14) |
 
-> **번개팅 배포 상태 (2026-07-13)**: 스키마(0017·0018)와 코드는 프로덕션에 올라갔지만
-> `FEATURE_BUNGAETING`/`VITE_FEATURE_BUNGAETING` 환경변수를 Railway에 **설정하지 않아** 기능은
-> 완전히 비활성(서버 라우터 NOT_FOUND 게이트 + 클라이언트 진입점 숨김). 실사용자 오픈은 spec §7
-> 전제조건(사업자등록·본인인증·실결제·SMS·스토리지) 충족 후 플래그를 켜는 시점에 한다.
+> **번개팅 배포 상태 (2026-07-14 갱신)**: 번개팅 **①~⑦ 전 단계**의 스키마(0017~0021)와 코드가
+> 프로덕션에 배포 완료됐다. 그러나 `FEATURE_BUNGAETING`/`VITE_FEATURE_BUNGAETING` 환경변수를
+> Railway에 **설정하지 않아 기능은 완전히 비활성**이다:
+> - 서버: 모든 번개팅 tRPC 라우터가 `bungaetingProcedure` 게이트에서 `NOT_FOUND` (authed 기준).
+>   비로그인은 그 앞 인증 게이트에서 UNAUTHORIZED.
+> - 클라이언트: 네비게이션 진입점("번개팅" 탭·링크)과 관리자 "번개팅" 탭이 `VITE_FEATURE_BUNGAETING`
+>   미설정으로 렌더링되지 않음.
+>
+> 실사용자 오픈은 spec §7 전제조건(사업자등록·본인인증(포트원)·실결제(토스 라이브)·SMS 실채널·
+> 이미지 스토리지) 충족 후, Railway에 두 플래그를 켜는 시점에 한다. 그 전까지는 스키마·코드만
+> 올라가 있는 완전 비활성 상태로 유지한다.
+>
+> 구현 범위: ① 프로필/온보딩/선호 · ② 성비 모드 트립+좌석락+예약자격 · ③ D-5 확정+성비 판정 ·
+> ④ 참가자 프로필 공개(3중 접근제어) · ⑤ 카카오 오픈채팅 링크(인앱채팅 대신) · ⑥ 제안/찜/제안자
+> 포인트 보상 · ⑦ 관리자 콘솔(번개팅 탭). mock 지점(본인인증·SMS·이미지)은 실연동 TODO로 표시됨.
 
 **0002는 보류 중** — 프로덕션 `reservations`에 남은 4행(전부 개발자 본인의 테스트/스모크 데이터, 실사용자 없음 — [RESERVATIONS_LEGACY_COLUMNS.md](./RESERVATIONS_LEGACY_COLUMNS.md) 참고) 유실을 동반하는 파괴적 변경이라 별도 세션에서 백업 후 진행 예정.
 
