@@ -1,0 +1,1 @@
+ALTER TABLE `trips` MODIFY COLUMN `cancelReason` enum('admin_cancel','min_count_not_met','gender_ratio_not_met');

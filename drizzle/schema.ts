@@ -135,7 +135,9 @@ export type PointInterest = typeof pointInterests.$inferSelect;
 export type InsertPointInterest = typeof pointInterests.$inferInsert;
 
 // ─── Trips (Shuttles) ─────────────────────────────────────────────────────────
-export const TRIP_CANCEL_REASONS = ["admin_cancel", "min_count_not_met"] as const;
+// gender_ratio_not_met: 번개팅 회차가 D-5에 성비(반반 minM/minF, 전용 최소인원)
+// 미달로 자동취소된 경우. min_count_not_met과 구분하되 처리(전액환불)는 동일 (spec §2-2).
+export const TRIP_CANCEL_REASONS = ["admin_cancel", "min_count_not_met", "gender_ratio_not_met"] as const;
 export type TripCancelReason = (typeof TRIP_CANCEL_REASONS)[number];
 
 export const trips = mysqlTable("trips", {

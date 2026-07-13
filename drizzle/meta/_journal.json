@@ -127,6 +127,13 @@
       "when": 1783947323960,
       "tag": "0017_overrated_sleeper",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1783952296230,
+      "tag": "0018_amazing_vindicator",
+      "breakpoints": true
     }
   ]
 }

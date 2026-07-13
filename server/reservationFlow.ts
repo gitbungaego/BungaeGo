@@ -43,7 +43,12 @@ export async function maybeConfirmTrip(tripId: number): Promise<void> {
   if (!isCreatedAfterOwnD5(trip)) return;
   const policy = getPolicy(trip.theme);
   const tripReservations = await getReservationsWithPaymentsByTripId(tripId);
-  if (!policy.canConfirm(trip, tripReservations)) return;
+  // 번개팅은 성비 판정에 성별 맵이 필요 (표준 트립은 ctx 없이 기존 판정 그대로).
+  const ctx: PolicyContext | undefined =
+    trip.theme === BUNGAETING_THEME
+      ? { genderByUserId: await buildGenderMap(tripReservations) }
+      : undefined;
+  if (!policy.canConfirm(trip, tripReservations, ctx)) return;
 
   // Idempotent: only the caller that actually flips collecting -> confirmed
   // gets true back, so confirm-only follow-up never double-fires when two

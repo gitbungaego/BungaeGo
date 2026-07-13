@@ -6,10 +6,13 @@ import {
   getReservationsWithPaymentsByTripId,
   getTripsByStatus,
 } from "../db";
-import { getPolicy } from "../matching/confirmPolicy";
+import { getPolicy, type PolicyContext } from "../matching/confirmPolicy";
+import { buildGenderMap } from "../bungaeting/policy";
 import { cancelReservationsForTrip } from "../payments";
 import { notifyTrip } from "../notify/tripMessenger";
-import type { Trip } from "../../drizzle/schema";
+import type { Trip, TripCancelReason } from "../../drizzle/schema";
+
+const BUNGAETING_THEME = "bungaeting";
 
 const D5_DAYS_BEFORE = 5;
 export const SCHEDULER_INTERVAL_MS = 10 * 60 * 1000;
@@ -26,7 +29,15 @@ async function judgeTrip(trip: Trip, now: Date): Promise<void> {
   const policy = getPolicy(trip.theme);
   const tripReservations = await getReservationsWithPaymentsByTripId(trip.id);
 
-  if (policy.canConfirm(trip, tripReservations)) {
+  // 번개팅 회차는 성비 판정에 예약자 성별 맵이 필요하다 (spec §2-2: 최소인원 + 성비
+  // 동시 판정). 표준 트립은 ctx 없이 기존 판정 그대로 — 회귀 방지.
+  const ctx: PolicyContext | undefined =
+    trip.theme === BUNGAETING_THEME
+      ? { genderByUserId: await buildGenderMap(tripReservations) }
+      : undefined;
+
+  if (policy.canConfirm(trip, tripReservations, ctx)) {
+    // 확정 시점 = 프로필 공개 시점 = 환불불가 시작점 = D-5 00:00 KST (셋이 동일 경계).
     const didConfirm = await confirmTripIfCollecting(trip.id);
     if (!didConfirm) return;
     const event = await getEventById(trip.eventId);
@@ -39,7 +50,10 @@ async function judgeTrip(trip: Trip, now: Date): Promise<void> {
     return;
   }
 
-  const didCancel = await cancelTripIfCollecting(trip.id, "min_count_not_met");
+  // 번개팅은 성비/최소인원 미달을 gender_ratio_not_met로 구분(처리는 동일 전액환불).
+  const cancelReason: TripCancelReason =
+    trip.theme === BUNGAETING_THEME ? "gender_ratio_not_met" : "min_count_not_met";
+  const didCancel = await cancelTripIfCollecting(trip.id, cancelReason);
   if (!didCancel) return;
   await cancelReservationsForTrip(trip);
   const event = await getEventById(trip.eventId);

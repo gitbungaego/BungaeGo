@@ -98,6 +98,8 @@ curl -s -o /dev/null -w "%{http_code}\n" "https://bungaego.com/api/oauth/kakao/l
 | 0014 | loose_black_panther | events: `searchAliases`, `tags` (검색 별칭/태그) | 적용됨 |
 | 0015 | lowly_lester | events: `status` enum에 `deleted` 추가 (cascade 삭제) | 적용됨 |
 | 0016 | zippy_hulk | `point_interests` 테이블 (UNIQUE(eventId,rallyPointCandidateId,userId)) | 적용됨 |
+| 0017 | overrated_sleeper | 번개팅 `bungaeting_profiles`, `bungaeting_preferences` 테이블 | **미적용(프로덕션)** — 로컬 dev만. 번개팅은 FEATURE_BUNGAETING OFF 상태라 프로덕션 오픈 전제조건 충족 시 적용 |
+| 0018 | amazing_vindicator | trips: `cancelReason` enum에 `gender_ratio_not_met` 추가 (번개팅 성비 미달 자동취소, 순수 추가형) | **미적용(프로덕션)** — 로컬 dev만. 0017과 함께 번개팅 배포 시 적용 |
 
 **0002는 보류 중** — 프로덕션 `reservations`에 남은 4행(전부 개발자 본인의 테스트/스모크 데이터, 실사용자 없음 — [RESERVATIONS_LEGACY_COLUMNS.md](./RESERVATIONS_LEGACY_COLUMNS.md) 참고) 유실을 동반하는 파괴적 변경이라 별도 세션에서 백업 후 진행 예정.
 
