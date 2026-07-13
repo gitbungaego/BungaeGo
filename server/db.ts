@@ -817,6 +817,32 @@ export async function getTripsByStatus(status: Trip["status"]): Promise<Trip[]> 
   return db.select().from(trips).where(eq(trips.status, status));
 }
 
+// 번개팅 홈용: 아직 출발 안 한 모집/확정 상태의 번개팅 회차 + 이벤트 기본정보.
+export interface BungaetingTripListItem {
+  trip: Trip;
+  event: { id: number; title: string; venue: string; eventDate: Date };
+}
+export async function getActiveBungaetingTrips(now: Date = new Date()): Promise<BungaetingTripListItem[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ trip: trips, eventId: events.id, title: events.title, venue: events.venue, eventDate: events.eventDate })
+    .from(trips)
+    .innerJoin(events, eq(trips.eventId, events.id))
+    .where(
+      and(
+        eq(trips.theme, "bungaeting"),
+        inArray(trips.status, ["collecting", "confirmed"]),
+        gte(trips.departureAt, now)
+      )
+    )
+    .orderBy(trips.departureAt);
+  return rows.map((r) => ({
+    trip: r.trip,
+    event: { id: r.eventId, title: r.title, venue: r.venue, eventDate: r.eventDate },
+  }));
+}
+
 export async function incrementTripCount(tripId: number, seats: number): Promise<Trip | undefined> {
   const db = await getDb();
   if (!db) return undefined;

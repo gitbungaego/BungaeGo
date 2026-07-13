@@ -4,13 +4,19 @@ import { calculateAge } from "@shared/bungaeting/age";
 import { GENDERS, GENDER_MODES } from "../../drizzle/schema";
 import {
   createBungaetingProfile,
+  getActiveBungaetingTrips,
   getBungaetingPreferenceByUserId,
   getBungaetingProfileByUserId,
+  getReservationsWithPaymentsByTripId,
+  getTripById,
   upsertBungaetingPreference,
 } from "../db";
+import type { Trip } from "../../drizzle/schema";
 import { CONSENT_VERSIONS, recordConsent } from "../consents";
 import { isEnabled } from "../featureFlags";
+import { getPolicy } from "../matching/confirmPolicy";
 import { protectedProcedure, router } from "../_core/trpc";
+import { buildGenderMap, parseBungaetingConfig } from "./policy";
 import { verificationAdapter } from "./verification";
 
 // 성인 기준 만 나이 (spec §3-2 성인 필수). 미성년자 유입 차단은 서비스 안전의 근간.
@@ -29,6 +35,21 @@ export const bungaetingProcedure = protectedProcedure.use(({ ctx, next }) => {
 });
 
 const BIRTHDATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// 번개팅 회차 잔여석 계산 — 반반 모드는 성별 맵으로 byGroup("남 N·여 M") 분리.
+async function withBungaetingAvailability(trip: Trip) {
+  const policy = getPolicy(trip.theme);
+  const reservations = await getReservationsWithPaymentsByTripId(trip.id);
+  const genderByUserId = await buildGenderMap(reservations);
+  const cfg = parseBungaetingConfig(trip);
+  return {
+    availability: policy.availability(trip, reservations, { genderByUserId }),
+    genderMode: cfg.genderMode,
+    ageMin: cfg.ageMin,
+    ageMax: cfg.ageMax,
+    feeAmount: cfg.feeAmount ?? null,
+  };
+}
 
 export const bungaetingRouter = router({
   // ── 프로필 / 온보딩 ──────────────────────────────────────────────────────────
@@ -134,6 +155,48 @@ export const bungaetingRouter = router({
           smsOptIn: input.smsOptIn,
         });
         return { success: true } as const;
+      }),
+  }),
+
+  // ── 회차 목록/상세 (spec §3-1, §3-3) ──────────────────────────────────────────
+  trips: router({
+    // 홈: 아직 출발 안 한 번개팅 회차 + 잔여석(반반은 성별 분리).
+    list: bungaetingProcedure.query(async () => {
+      const items = await getActiveBungaetingTrips();
+      return Promise.all(
+        items.map(async ({ trip, event }) => ({
+          id: trip.id,
+          eventId: event.id,
+          eventTitle: event.title,
+          venue: event.venue,
+          eventDate: event.eventDate,
+          departureAt: trip.departureAt,
+          price: trip.price,
+          minCount: trip.minCount,
+          maxCount: trip.maxCount,
+          ...(await withBungaetingAvailability(trip)),
+        }))
+      );
+    }),
+
+    byId: bungaetingProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        const trip = await getTripById(input.id);
+        if (!trip || trip.theme !== "bungaeting") {
+          throw new TRPCError({ code: "NOT_FOUND", message: "번개팅 회차를 찾을 수 없습니다." });
+        }
+        return {
+          id: trip.id,
+          eventId: trip.eventId,
+          departureAt: trip.departureAt,
+          returnAt: trip.returnAt,
+          price: trip.price,
+          status: trip.status,
+          minCount: trip.minCount,
+          maxCount: trip.maxCount,
+          ...(await withBungaetingAvailability(trip)),
+        };
       }),
   }),
 });

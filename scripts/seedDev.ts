@@ -202,6 +202,45 @@ async function main() {
     console.log(`[seedDev]   └ autoMatchEnabled=true, price/seat=21000`);
   }
 
+  // ── 4. 번개팅 반반 모드 회차 (성별 잔여석 표시 확인용) ─────────────────────────
+  const btEventId = await ensureEvent({
+    title: "[개발] 번개팅 반반 회차 테스트",
+    category: "festival",
+    eventDate: kst(2026, 10, 4, 18, 0),
+    venue: "테스트 페스티벌 D",
+    status: "active",
+    organizerName: "번개GO 운영팀",
+    creatorId: null,
+  });
+  if (btEventId) {
+    // theme='bungaeting' + themeConfig(JSON)로만 성비 모드 표현 (trips 컬럼 추가 없음).
+    const tripData: InsertTrip = {
+      eventId: btEventId,
+      mode: "bus",
+      status: "collecting",
+      minCount: 16,
+      maxCount: 16,
+      currentCount: 0,
+      price: 45000,
+      departureAt: kst(2026, 10, 4, 15, 0),
+      returnAt: kst(2026, 10, 4, 23, 0),
+      isRoundTrip: true,
+      notes: "번개팅 반반 모드(만 27~35세) 확인용",
+      theme: "bungaeting",
+      themeConfig: {
+        genderMode: "half",
+        genderCap: { M: 8, F: 8 },
+        genderMin: { M: 6, F: 6 },
+        ageMin: 27,
+        ageMax: 35,
+        feeAmount: 20000,
+      },
+    };
+    const tripResult = await db.insert(trips).values(tripData);
+    const tripId = (tripResult[0] as any).insertId as number;
+    console.log(`[seedDev]   └ TRIP #${tripId} (bungaeting half, 남8·여8)`);
+  }
+
   console.log("\n[seedDev] 완료");
   process.exit(0);
 }

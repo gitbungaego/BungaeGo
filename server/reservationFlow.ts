@@ -1,11 +1,13 @@
 import { TRPCError } from "@trpc/server";
 import { isCreatedAfterOwnD5 } from "@shared/cancellationPolicy";
+import { calculateAge } from "@shared/bungaeting/age";
 import type { User } from "../drizzle/schema";
 import {
   addPoints,
   confirmTripIfCollecting,
   createReferral,
   createRideRequest,
+  getBungaetingProfileByUserId,
   getEventById,
   getReferralByPair,
   getReservationsWithPaymentsByTripId,
@@ -13,8 +15,11 @@ import {
   getUserByReferralCode,
   reserveSeatsWithLock,
 } from "./db";
-import { getPolicy } from "./matching/confirmPolicy";
+import { getPolicy, type PolicyContext } from "./matching/confirmPolicy";
+import { buildGenderMap } from "./bungaeting/policy";
 import { notifyTrip } from "./notify/tripMessenger";
+
+const BUNGAETING_THEME = "bungaeting";
 
 // ─── Points usage guard ───────────────────────────────────────────────────────
 export function validatePointsUsage(pointsUsed: number, userBalance: number, fareAmount: number): void {
@@ -108,6 +113,18 @@ export async function finalizeReservation(
     }
   }
 
+  // 번개팅 회차는 신청자의 프로필/성별/만 나이(탑승일 기준)를 자격 검증에 쓴다.
+  // 프로필은 락 밖에서 미리 조회 — 안정적(예약 트랜잭션에서 안 바뀜)이므로 안전.
+  // 표준 트립은 이 분기를 타지 않아 기존 경로 그대로(회귀 없음).
+  let applicant: PolicyContext["applicant"];
+  if (trip.theme === BUNGAETING_THEME) {
+    const profile = await getBungaetingProfileByUserId(user.id);
+    applicant = {
+      profile: profile ?? null,
+      ageAtDeparture: profile ? calculateAge(profile.birthDate, trip.departureAt) : null,
+    };
+  }
+
   // Seat validation + reservation insert run inside a single transaction
   // with the trip row locked (SELECT ... FOR UPDATE), so two concurrent
   // requests for the last seat can't both read "1 remaining" and both
@@ -116,11 +133,19 @@ export async function finalizeReservation(
   const reservationId = await reserveSeatsWithLock(input.tripId, async ({ trip: lockedTrip, reservations: tripReservations, insertReservation, incrementCount }) => {
     const policy = getPolicy(lockedTrip.theme);
 
-    const reserveCheck = policy.canReserve(lockedTrip, tripReservations, user);
+    // 반반 모드 성별 잔여석 계산용 성별 맵 — 락 안에서 조회(예약 집합이 고정된 상태).
+    // 표준 트립은 undefined라 정책이 무시하고 기존 계산을 그대로 쓴다.
+    const ctx: PolicyContext = {
+      applicant,
+      genderByUserId:
+        lockedTrip.theme === BUNGAETING_THEME ? await buildGenderMap(tripReservations) : undefined,
+    };
+
+    const reserveCheck = policy.canReserve(lockedTrip, tripReservations, user, ctx);
     if (!reserveCheck.ok) {
-      throw new TRPCError({ code: "BAD_REQUEST", message: reserveCheck.reason });
+      throw new TRPCError({ code: reserveCheck.code ?? "BAD_REQUEST", message: reserveCheck.reason });
     }
-    if (input.seats > policy.availability(lockedTrip, tripReservations).remaining) {
+    if (input.seats > policy.remainingForApplicant(lockedTrip, tripReservations, ctx)) {
       throw new TRPCError({ code: "BAD_REQUEST", message: "좌석이 부족합니다." });
     }
 

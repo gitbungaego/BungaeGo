@@ -82,6 +82,7 @@ import { nanoid } from "nanoid";
 import { buildDemandGrid, summarizeNearbyDemand } from "./demand";
 import { CONSENT_VERSIONS, recordConsent } from "./consents";
 import { bungaetingRouter } from "./bungaeting/router";
+import { buildGenderMap } from "./bungaeting/policy";
 import { isThemeAllowed } from "./featureFlags";
 import { getPolicy } from "./matching/confirmPolicy";
 import { notifyEventCancellation, notifyTrip } from "./notify/tripMessenger";
@@ -110,7 +111,13 @@ export { validatePointsUsage } from "./reservationFlow";
 async function withAvailability(trip: Trip) {
   const policy = getPolicy(trip.theme);
   const tripReservations = await getReservationsWithPaymentsByTripId(trip.id);
-  return { ...trip, availability: policy.availability(trip, tripReservations) };
+  // 번개팅 반반 모드는 성별 잔여석(byGroup)을 보여주려면 성별 맵이 필요하다.
+  // 표준 트립은 추가 조회 없이 기존 경로 그대로(회귀 없음).
+  const ctx =
+    trip.theme === "bungaeting"
+      ? { genderByUserId: await buildGenderMap(tripReservations) }
+      : undefined;
+  return { ...trip, availability: policy.availability(trip, tripReservations, ctx) };
 }
 
 // Ride requests still counted as live demand for the map: anything that
