@@ -33,3 +33,12 @@ pnpm tsx scripts/seed.ts
 
 - 행사 일정과 장소는 2026-07-03 조사 시점 기준이므로, 실제 운행 전 주최 측 공지로 최종 확인이 필요합니다.
 - 셔틀 운행은 실제 운수사 계약이 선행되어야 하며, `operatorName`/`operatorContact`는 계약 후 관리자 페이지에서 갱신하세요.
+
+## apply-migration.cjs — 수동 마이그레이션 적용
+
+`drizzle-kit migrate`를 쓸 수 없는 상황에서 특정 마이그레이션 SQL을 직접 적용합니다.
+기존의 `apply-0002` ~ `apply-0016-migration.cjs` 13개 파일을 이 스크립트 하나로 통합했습니다.
+
+```bash
+node scripts/apply-migration.cjs 0017   # drizzle/0017_*.sql 적용
+```
