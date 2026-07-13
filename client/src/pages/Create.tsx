@@ -45,7 +45,7 @@ interface BoardingPointInput {
 }
 
 export default function CreatePage() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const [, navigate] = useLocation();
   const [step, setStep] = useState(1);
 
@@ -376,18 +376,20 @@ export default function CreatePage() {
                 </div>
               </div>
 
-              {/* Search aliases — hidden, bilingual search keywords only */}
-              <div className="space-y-1.5">
-                <Label>검색 별칭 (선택)</Label>
-                <Input
-                  value={searchAliases}
-                  onChange={(e) => setSearchAliases(e.target.value)}
-                  placeholder="코르티스, cortis, 코티"
-                />
-                <p className="text-xs text-muted-foreground">
-                  표기 변형을 쉼표로 구분해 입력하세요. 화면에는 안 보이고 검색에만 쓰입니다 (한글↔영문 검색 대응).
-                </p>
-              </div>
+              {/* Search aliases — admin-only, hidden bilingual search keywords */}
+              {user?.role === "admin" && (
+                <div className="space-y-1.5">
+                  <Label>검색 별칭 (관리자 전용, 선택)</Label>
+                  <Input
+                    value={searchAliases}
+                    onChange={(e) => setSearchAliases(e.target.value)}
+                    placeholder="코르티스, cortis, 코티"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    표기 변형을 쉼표로 구분해 입력하세요. 화면에는 안 보이고 검색에만 쓰입니다 (한글↔영문 검색 대응).
+                  </p>
+                </div>
+              )}
             </div>
           )}
 

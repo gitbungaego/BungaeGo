@@ -218,8 +218,11 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
+        // 검색 별칭은 관리자만 지정 가능 — 일반 사용자 입력은 무시한다.
+        const { searchAliases, ...rest } = input;
         const id = await createEvent({
-          ...input,
+          ...rest,
+          searchAliases: ctx.user.role === "admin" ? searchAliases : undefined,
           eventDate: new Date(input.eventDate),
           creatorId: ctx.user.id,
         });
