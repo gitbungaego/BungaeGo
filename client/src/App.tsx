@@ -23,6 +23,7 @@ import BungaetingOnboarding from "./pages/bungaeting/Onboarding";
 import BungaetingPreferences from "./pages/bungaeting/Preferences";
 import BungaetingMe from "./pages/bungaeting/Me";
 import BungaetingTripDetail from "./pages/bungaeting/TripDetail";
+import BungaetingProposals from "./pages/bungaeting/Proposals";
 
 function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -77,6 +78,9 @@ function Router() {
       </Route>
       <Route path="/bungaeting/onboarding">
         <BungaetingLayout><BungaetingOnboarding /></BungaetingLayout>
+      </Route>
+      <Route path="/bungaeting/proposals">
+        <BungaetingLayout><BungaetingProposals /></BungaetingLayout>
       </Route>
       <Route path="/bungaeting/preferences">
         <BungaetingLayout><BungaetingPreferences /></BungaetingLayout>

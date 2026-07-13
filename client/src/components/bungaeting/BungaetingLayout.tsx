@@ -1,12 +1,12 @@
 import { Link, useLocation } from "wouter";
-import { Heart, Home, Sparkles, User } from "lucide-react";
+import { Heart, Home, Lightbulb, Sparkles, User } from "lucide-react";
 
 // 번개팅 서브 브랜드(옐로 톤) 레이아웃 + 하단 네비게이션 탭 (모바일 웹 기준, spec §3-1).
 // 네이티브 앱이 아니므로 "하단 탭"은 fixed 하단 네비게이션 바로 구현.
-// (제안 탭은 §5 회차 제안 단계에서 추가 예정)
 
 const TABS = [
   { href: "/bungaeting", label: "홈", icon: Home, exact: true },
+  { href: "/bungaeting/proposals", label: "제안", icon: Lightbulb, exact: false },
   { href: "/bungaeting/preferences", label: "선호", icon: Heart, exact: false },
   { href: "/bungaeting/me", label: "내 프로필", icon: User, exact: false },
 ];

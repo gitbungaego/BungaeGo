@@ -19,6 +19,7 @@ import { router } from "../_core/trpc";
 import { loadConfirmedTripMembership } from "./access";
 import { bungaetingProcedure } from "./procedure";
 import { buildGenderMap, parseBungaetingConfig } from "./policy";
+import { proposalRouter } from "./proposalRouter";
 import { verificationAdapter } from "./verification";
 
 // 성인 기준 만 나이 (spec §3-2 성인 필수). 미성년자 유입 차단은 서비스 안전의 근간.
@@ -236,4 +237,7 @@ export const bungaetingRouter = router({
         return { openChatUrl: trip.openChatUrl ?? null };
       }),
   }),
+
+  // ── 회차 제안 + 찜 (spec §3-5) ────────────────────────────────────────────────
+  proposals: proposalRouter,
 });

@@ -5,6 +5,8 @@ import {
   BoardingPoint,
   BungaetingPreference,
   BungaetingProfile,
+  BungaetingProposalInterest,
+  BungaetingTripProposal,
   ChargeType,
   Cluster,
   Consent,
@@ -12,6 +14,8 @@ import {
   InsertBoardingPoint,
   InsertBungaetingPreference,
   InsertBungaetingProfile,
+  InsertBungaetingProposalInterest,
+  InsertBungaetingTripProposal,
   InsertCluster,
   InsertConsent,
   InsertEvent,
@@ -40,6 +44,8 @@ import {
   boardingPoints,
   bungaetingPreferences,
   bungaetingProfiles,
+  bungaetingProposalInterests,
+  bungaetingTripProposals,
   clusters,
   consents,
   eventLikes,
@@ -1915,4 +1921,145 @@ export async function upsertBungaetingPreference(
     .insert(bungaetingPreferences)
     .values({ ...data, userId })
     .onDuplicateKeyUpdate({ set: { ...data } });
+}
+
+// ─── Bungaeting: 회차 제안 + 찜 (spec §3-5) ────────────────────────────────────
+export async function createBungaetingProposal(
+  data: Omit<InsertBungaetingTripProposal, "id">
+): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const result = await db.insert(bungaetingTripProposals).values(data);
+  return (result[0] as any).insertId;
+}
+
+export async function getBungaetingProposalById(id: number): Promise<BungaetingTripProposal | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(bungaetingTripProposals).where(eq(bungaetingTripProposals.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function getOpenBungaetingProposals(): Promise<BungaetingTripProposal[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(bungaetingTripProposals)
+    .where(eq(bungaetingTripProposals.status, "open"))
+    .orderBy(desc(bungaetingTripProposals.createdAt));
+}
+
+// 찜 멱등 토글 — event_likes/point_interests와 동일 패턴(ER_DUP_ENTRY 안전).
+// 이미 찜한 상태에서 다시 부르면 해제, 없으면 등록. genderModePreference는 등록 시 저장.
+export async function toggleBungaetingProposalInterest(
+  proposalId: number,
+  userId: number,
+  genderModePreference: BungaetingProposalInterest["genderModePreference"]
+): Promise<{ interested: boolean; count: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+
+  const existing = await db
+    .select({ id: bungaetingProposalInterests.id })
+    .from(bungaetingProposalInterests)
+    .where(
+      and(
+        eq(bungaetingProposalInterests.proposalId, proposalId),
+        eq(bungaetingProposalInterests.userId, userId)
+      )
+    )
+    .limit(1);
+
+  let interested: boolean;
+  if (existing.length > 0) {
+    await db.delete(bungaetingProposalInterests).where(eq(bungaetingProposalInterests.id, existing[0].id));
+    interested = false;
+  } else {
+    try {
+      await db.insert(bungaetingProposalInterests).values({ proposalId, userId, genderModePreference });
+      interested = true;
+    } catch (error) {
+      if (isDuplicateKeyError(error)) interested = true;
+      else throw error;
+    }
+  }
+
+  const [row] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(bungaetingProposalInterests)
+    .where(eq(bungaetingProposalInterests.proposalId, proposalId));
+  return { interested, count: Number(row?.count ?? 0) };
+}
+
+// 성비 모드별 찜 집계 (genderModePreference로 구분). null(모드 미선택)은 "any" 버킷에 합산.
+export async function getBungaetingProposalInterestBreakdown(
+  proposalId: number
+): Promise<{ total: number; byMode: Record<string, number> }> {
+  const db = await getDb();
+  if (!db) return { total: 0, byMode: {} };
+  const rows = await db
+    .select({ mode: bungaetingProposalInterests.genderModePreference, count: sql<number>`count(*)` })
+    .from(bungaetingProposalInterests)
+    .where(eq(bungaetingProposalInterests.proposalId, proposalId))
+    .groupBy(bungaetingProposalInterests.genderModePreference);
+  const byMode: Record<string, number> = {};
+  let total = 0;
+  for (const r of rows) {
+    const key = r.mode ?? "any";
+    byMode[key] = (byMode[key] ?? 0) + Number(r.count);
+    total += Number(r.count);
+  }
+  return { total, byMode };
+}
+
+export async function getInterestedProposalIds(userId: number): Promise<Set<number>> {
+  const set = new Set<number>();
+  const db = await getDb();
+  if (!db) return set;
+  const rows = await db
+    .select({ proposalId: bungaetingProposalInterests.proposalId })
+    .from(bungaetingProposalInterests)
+    .where(eq(bungaetingProposalInterests.userId, userId));
+  for (const r of rows) set.add(r.proposalId);
+  return set;
+}
+
+// 전환 시 우선 결제 알림 대상 — 찜한 사용자들의 전화번호.
+export async function getBungaetingProposalInterestedUsers(
+  proposalId: number
+): Promise<{ userId: number; phone: string | null }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({ userId: bungaetingProposalInterests.userId, phone: users.phone })
+    .from(bungaetingProposalInterests)
+    .innerJoin(users, eq(bungaetingProposalInterests.userId, users.id))
+    .where(eq(bungaetingProposalInterests.proposalId, proposalId));
+}
+
+// 전환: open일 때만 converted로 플립(멱등 — 이미 전환됐으면 false).
+export async function convertBungaetingProposalIfOpen(
+  proposalId: number,
+  convertedTripId: number
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const result = await db
+    .update(bungaetingTripProposals)
+    .set({ status: "converted", convertedTripId })
+    .where(and(eq(bungaetingTripProposals.id, proposalId), eq(bungaetingTripProposals.status, "open")));
+  return ((result[0] as any).affectedRows ?? 0) > 0;
+}
+
+// 제안자 보상 지급 잠금 — rewardGrantedAt이 NULL일 때만 세팅(조건부 UPDATE).
+// affectedRows>0을 받은 호출자만 실제 addPoints를 수행 → 재전환/재실행 이중 지급 방지.
+export async function claimBungaetingProposalReward(proposalId: number, now: Date = new Date()): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const result = await db
+    .update(bungaetingTripProposals)
+    .set({ rewardGrantedAt: now })
+    .where(and(eq(bungaetingTripProposals.id, proposalId), isNull(bungaetingTripProposals.rewardGrantedAt)));
+  return ((result[0] as any).affectedRows ?? 0) > 0;
 }

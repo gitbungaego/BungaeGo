@@ -534,3 +534,46 @@ export const bungaetingPreferences = mysqlTable(
 
 export type BungaetingPreference = typeof bungaetingPreferences.$inferSelect;
 export type InsertBungaetingPreference = typeof bungaetingPreferences.$inferInsert;
+
+// ─── Bungaeting 회차 제안 + 찜 (spec §3-5) ─────────────────────────────────────
+// 이용자가 행사+날짜를 제안 → 다른 이용자가 성비 모드별로 '찜' → 관리자가 정식 회차로
+// 전환. 제안자에게는 비금전 보상(포인트). "이 회차에 관심"이지 "이 사람과 함께"가 아님(§4).
+export const BUNGAETING_PROPOSAL_STATUSES = ["open", "converted", "closed"] as const;
+export type BungaetingProposalStatus = (typeof BUNGAETING_PROPOSAL_STATUSES)[number];
+
+export const bungaetingTripProposals = mysqlTable(
+  "bungaeting_trip_proposals",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    eventId: int("eventId").notNull(),
+    proposerId: int("proposerId").notNull(),
+    proposedDate: timestamp("proposedDate").notNull(),
+    notes: varchar("notes", { length: 300 }),
+    status: mysqlEnum("status", BUNGAETING_PROPOSAL_STATUSES).default("open").notNull(),
+    // 정식 회차 전환 시 연결되는 트립.
+    convertedTripId: int("convertedTripId"),
+    // 제안자 보상(포인트) 중복 지급 방지 플래그 — 조건부 UPDATE로 딱 한 번만 지급.
+    rewardGrantedAt: timestamp("rewardGrantedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [index("bungaeting_trip_proposals_event_idx").on(table.eventId)]
+);
+export type BungaetingTripProposal = typeof bungaetingTripProposals.$inferSelect;
+export type InsertBungaetingTripProposal = typeof bungaetingTripProposals.$inferInsert;
+
+// 찜: (proposal, user) 유니크로 멱등 토글 (event_likes/point_interests와 동일 패턴).
+// genderModePreference로 성비 모드별 관심을 구분 집계.
+export const bungaetingProposalInterests = mysqlTable(
+  "bungaeting_proposal_interests",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    proposalId: int("proposalId").notNull(),
+    userId: int("userId").notNull(),
+    genderModePreference: mysqlEnum("genderModePreference", GENDER_MODES),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("bungaeting_proposal_interests_proposal_user_idx").on(table.proposalId, table.userId)]
+);
+export type BungaetingProposalInterest = typeof bungaetingProposalInterests.$inferSelect;
+export type InsertBungaetingProposalInterest = typeof bungaetingProposalInterests.$inferInsert;
