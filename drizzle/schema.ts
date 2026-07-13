@@ -577,3 +577,28 @@ export const bungaetingProposalInterests = mysqlTable(
 );
 export type BungaetingProposalInterest = typeof bungaetingProposalInterests.$inferSelect;
 export type InsertBungaetingProposalInterest = typeof bungaetingProposalInterests.$inferInsert;
+
+// ─── Bungaeting 프로필 신고 (spec §3-7) ────────────────────────────────────────
+// 채팅 신고는 카카오 오픈채팅 체계로 이전(⑤ 축소). 여기선 "프로필 신고"만 최소 처리.
+// 참가자가 같은 회차의 다른 참가자 프로필을 신고 → 관리자가 검토해 블라인드/이용제한.
+export const BUNGAETING_REPORT_STATUSES = ["pending", "reviewed_blinded", "reviewed_restricted", "dismissed"] as const;
+export type BungaetingReportStatus = (typeof BUNGAETING_REPORT_STATUSES)[number];
+
+export const bungaetingReports = mysqlTable(
+  "bungaeting_reports",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    reporterId: int("reporterId").notNull(),
+    targetUserId: int("targetUserId").notNull(),
+    tripId: int("tripId").notNull(),
+    reason: varchar("reason", { length: 300 }),
+    status: mysqlEnum("status", BUNGAETING_REPORT_STATUSES).default("pending").notNull(),
+    handledBy: int("handledBy"),
+    handledAt: timestamp("handledAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  // 같은 신고자가 같은 회차의 같은 대상을 중복 신고 못 하게.
+  (table) => [uniqueIndex("bungaeting_reports_reporter_target_trip_idx").on(table.reporterId, table.targetUserId, table.tripId)]
+);
+export type BungaetingReport = typeof bungaetingReports.$inferSelect;
+export type InsertBungaetingReport = typeof bungaetingReports.$inferInsert;

@@ -6,6 +6,7 @@ import {
   BungaetingPreference,
   BungaetingProfile,
   BungaetingProposalInterest,
+  BungaetingReport,
   BungaetingTripProposal,
   ChargeType,
   Cluster,
@@ -15,6 +16,7 @@ import {
   InsertBungaetingPreference,
   InsertBungaetingProfile,
   InsertBungaetingProposalInterest,
+  InsertBungaetingReport,
   InsertBungaetingTripProposal,
   InsertCluster,
   InsertConsent,
@@ -45,6 +47,7 @@ import {
   bungaetingPreferences,
   bungaetingProfiles,
   bungaetingProposalInterests,
+  bungaetingReports,
   bungaetingTripProposals,
   clusters,
   consents,
@@ -2062,4 +2065,120 @@ export async function claimBungaetingProposalReward(proposalId: number, now: Dat
     .set({ rewardGrantedAt: now })
     .where(and(eq(bungaetingTripProposals.id, proposalId), isNull(bungaetingTripProposals.rewardGrantedAt)));
   return ((result[0] as any).affectedRows ?? 0) > 0;
+}
+
+// ─── Bungaeting: admin — 신고 처리 / 이용제한 / 모집현황 / 알림 (spec §7) ────────
+
+// 이용제한(restrict) 시 정리 대상: 그 유저의 "미확정(collecting)" 번개팅 회차 예약.
+// 이미 확정된 회차는 다른 참가자 피해 방지를 위해 유지한다 (spec §7-2).
+export async function getUnconfirmedBungaetingReservationIdsByUser(userId: number): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ id: reservations.id })
+    .from(reservations)
+    .innerJoin(trips, eq(reservations.tripId, trips.id))
+    .where(
+      and(
+        eq(reservations.userId, userId),
+        eq(trips.theme, "bungaeting"),
+        eq(trips.status, "collecting")
+      )
+    );
+  return rows.map((r) => r.id);
+}
+
+export async function insertBungaetingReport(data: Omit<InsertBungaetingReport, "id">): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const result = await db.insert(bungaetingReports).values(data);
+  return (result[0] as any).insertId;
+}
+
+export async function getBungaetingReportById(id: number): Promise<BungaetingReport | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(bungaetingReports).where(eq(bungaetingReports.id, id)).limit(1);
+  return rows[0];
+}
+
+// 관리자 신고함: 미처리(pending) 신고 + 대상/신고자 닉네임.
+export interface BungaetingReportRow {
+  id: number;
+  reporterId: number;
+  targetUserId: number;
+  tripId: number;
+  reason: string | null;
+  status: BungaetingReport["status"];
+  createdAt: Date;
+  targetNickname: string | null;
+  targetStatus: string | null;
+}
+export async function getPendingBungaetingReports(): Promise<BungaetingReportRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      id: bungaetingReports.id,
+      reporterId: bungaetingReports.reporterId,
+      targetUserId: bungaetingReports.targetUserId,
+      tripId: bungaetingReports.tripId,
+      reason: bungaetingReports.reason,
+      status: bungaetingReports.status,
+      createdAt: bungaetingReports.createdAt,
+      targetNickname: bungaetingProfiles.nickname,
+      targetStatus: bungaetingProfiles.status,
+    })
+    .from(bungaetingReports)
+    .leftJoin(bungaetingProfiles, eq(bungaetingReports.targetUserId, bungaetingProfiles.userId))
+    .where(eq(bungaetingReports.status, "pending"))
+    .orderBy(desc(bungaetingReports.createdAt));
+  return rows as BungaetingReportRow[];
+}
+
+export async function resolveBungaetingReport(
+  id: number,
+  status: BungaetingReport["status"],
+  handledBy: number
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(bungaetingReports)
+    .set({ status, handledBy, handledAt: new Date() })
+    .where(eq(bungaetingReports.id, id));
+}
+
+// 알림 발송 대상 전화번호 — 특정 회차 참가자(비취소).
+export async function getBungaetingTripParticipantPhones(tripId: number): Promise<{ userId: number; phone: string | null }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ userId: reservations.userId, phone: users.phone })
+    .from(reservations)
+    .innerJoin(users, eq(reservations.userId, users.id))
+    .where(eq(reservations.tripId, tripId));
+  return rows;
+}
+
+// 알림 발송 대상 전화번호 — SMS 수신 동의한 선호등록자 전원(성별 무관, §4-5).
+export async function getBungaetingSmsOptInPhones(): Promise<{ userId: number; phone: string | null }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({ userId: bungaetingPreferences.userId, phone: users.phone })
+    .from(bungaetingPreferences)
+    .innerJoin(users, eq(bungaetingPreferences.userId, users.id))
+    .where(eq(bungaetingPreferences.smsOptIn, true));
+}
+
+// 관리자 콘솔: 모든 번개팅 트립(모집현황·편집 대상).
+export async function getAllBungaetingTrips(): Promise<Trip[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(trips)
+    .where(eq(trips.theme, "bungaeting"))
+    .orderBy(desc(trips.createdAt));
 }

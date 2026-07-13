@@ -30,12 +30,14 @@ import {
   CheckCircle2,
   Route as RouteIcon,
   Shield,
+  Sparkles,
   Ticket,
   Users,
   XCircle,
 } from "lucide-react";
 import { Link } from "wouter";
 import { MatchingTab } from "@/components/admin/MatchingTab";
+import { BungaetingTab } from "@/components/admin/BungaetingTab";
 import { EventEditDialog } from "@/components/admin/EventEditDialog";
 import { EventDeleteDialog } from "@/components/admin/EventDeleteDialog";
 import { AutoMatchDialog } from "@/components/admin/AutoMatchDialog";
@@ -103,6 +105,12 @@ export default function AdminPage() {
               <RouteIcon className="h-3.5 w-3.5" />
               배차 매칭
             </TabsTrigger>
+            {import.meta.env.VITE_FEATURE_BUNGAETING === "true" && (
+              <TabsTrigger value="bungaeting" className="gap-1.5">
+                <Sparkles className="h-3.5 w-3.5" />
+                번개팅
+              </TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value="events" className="mt-4">
@@ -120,6 +128,11 @@ export default function AdminPage() {
           <TabsContent value="matching" className="mt-4">
             <MatchingTab />
           </TabsContent>
+          {import.meta.env.VITE_FEATURE_BUNGAETING === "true" && (
+            <TabsContent value="bungaeting" className="mt-4">
+              <BungaetingTab />
+            </TabsContent>
+          )}
         </Tabs>
       </div>
     </div>

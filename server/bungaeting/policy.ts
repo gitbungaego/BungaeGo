@@ -1,9 +1,36 @@
+import { TRPCError } from "@trpc/server";
 import { isWithinAgeBand } from "@shared/bungaeting/age";
 import type { SeatAvailability, ThemeConfig } from "@shared/types";
-import type { Gender, Trip } from "../../drizzle/schema";
+import { GENDER_MODES, type Gender, type GenderMode, type Trip } from "../../drizzle/schema";
 import type { ConfirmPolicy, ReserveCheck } from "../matching/confirmPolicy";
 import { getBungaetingProfilesByUserIds } from "../db";
 import type { ReservationWithPayment } from "../db";
+
+// 번개팅 회차 themeConfig 서버 검증 (spec §7-1). 잘못된 설정으로 회차가 열리면
+// 좌석/확정/자격 로직이 어긋나므로 생성·편집 시 관리자 입력을 여기서 검증한다.
+export function validateBungaetingThemeConfig(cfg: ThemeConfig): void {
+  if (!GENDER_MODES.includes(cfg.genderMode as GenderMode)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "성비 모드 값이 올바르지 않습니다." });
+  }
+  const bad = (m: string) => { throw new TRPCError({ code: "BAD_REQUEST", message: m }); };
+
+  if (cfg.genderMode === "half") {
+    if (!cfg.genderCap || cfg.genderCap.M <= 0 || cfg.genderCap.F <= 0) {
+      bad("반반 모드는 남/여 정원(genderCap)이 각각 1 이상이어야 합니다.");
+    }
+    const minM = cfg.genderMin?.M ?? 0;
+    const minF = cfg.genderMin?.F ?? 0;
+    if (minM < 0 || minF < 0) bad("성별 최소 인원은 0 이상이어야 합니다.");
+    if (minM > cfg.genderCap!.M || minF > cfg.genderCap!.F) {
+      bad("성별 최소 인원은 해당 성별 정원을 초과할 수 없습니다.");
+    }
+  }
+
+  const { ageMin, ageMax } = cfg;
+  if (ageMin != null && (ageMin < 0 || ageMin > 120)) bad("나이 하한이 올바르지 않습니다.");
+  if (ageMax != null && (ageMax < 0 || ageMax > 120)) bad("나이 상한이 올바르지 않습니다.");
+  if (ageMin != null && ageMax != null && ageMin > ageMax) bad("나이 하한이 상한보다 클 수 없습니다.");
+}
 
 // trips.themeConfig(JSON)를 번개팅 설정으로 안전하게 파싱. 누락 필드는 기본값.
 export function parseBungaetingConfig(trip: Trip): ThemeConfig {

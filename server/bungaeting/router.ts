@@ -10,6 +10,8 @@ import {
   getBungaetingProfilesByUserIds,
   getReservationsWithPaymentsByTripId,
   getTripById,
+  insertBungaetingReport,
+  isDuplicateKeyError,
   upsertBungaetingPreference,
 } from "../db";
 import type { Trip } from "../../drizzle/schema";
@@ -17,6 +19,7 @@ import { CONSENT_VERSIONS, recordConsent } from "../consents";
 import { getPolicy } from "../matching/confirmPolicy";
 import { router } from "../_core/trpc";
 import { loadConfirmedTripMembership } from "./access";
+import { bungaetingAdminRouter } from "./adminRouter";
 import { bungaetingProcedure } from "./procedure";
 import { buildGenderMap, parseBungaetingConfig } from "./policy";
 import { proposalRouter } from "./proposalRouter";
@@ -236,8 +239,38 @@ export const bungaetingRouter = router({
         const { trip } = await loadConfirmedTripMembership(input.tripId, ctx.user.id);
         return { openChatUrl: trip.openChatUrl ?? null };
       }),
+
+    // ── 프로필 신고 (spec §3-7) — 같은 회차 참가자만 서로 신고 가능 ────────────────
+    // 채팅 신고는 카카오 오픈채팅으로 이전(⑤). 여기선 프로필 신고만. 신고자·대상 모두
+    // 그 회차의 유효 참가자여야 하고, 중복 신고는 UNIQUE로 무해 처리.
+    reportParticipant: bungaetingProcedure
+      .input(z.object({ tripId: z.number(), targetUserId: z.number(), reason: z.string().max(300).optional() }))
+      .mutation(async ({ input, ctx }) => {
+        const { activeUserIds } = await loadConfirmedTripMembership(input.tripId, ctx.user.id);
+        if (input.targetUserId === ctx.user.id) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "본인은 신고할 수 없습니다." });
+        }
+        if (!activeUserIds.has(input.targetUserId)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "같은 회차 참가자만 신고할 수 있습니다." });
+        }
+        try {
+          await insertBungaetingReport({
+            reporterId: ctx.user.id,
+            targetUserId: input.targetUserId,
+            tripId: input.tripId,
+            reason: input.reason,
+            status: "pending",
+          });
+        } catch (error) {
+          if (!isDuplicateKeyError(error)) throw error; // 이미 신고함 → 무해 통과
+        }
+        return { success: true } as const;
+      }),
   }),
 
   // ── 회차 제안 + 찜 (spec §3-5) ────────────────────────────────────────────────
   proposals: proposalRouter,
+
+  // ── 관리자 콘솔 (spec §7) — 회차 생성/편집·모집현황·신고처리·알림 ────────────────
+  admin: bungaetingAdminRouter,
 });

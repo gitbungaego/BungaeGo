@@ -3,15 +3,21 @@ import { evaluateCancellation } from "@shared/cancellationPolicy";
 import {
   addPoints,
   createPaymentWithItems,
+  decrementTripCount,
   getLatestPaymentByReservationId,
   getLatestPaymentByRideRequestId,
   getPaymentItemsByPaymentId,
+  getReferralByReservationId,
+  getReservationById,
   getReservationsByTripId,
   getRideRequestsByEventId,
+  getTripById,
   updatePaymentStatus,
+  updateReferralStatus,
   updateRideRequestStatus,
 } from "./db";
 import { cancelTossPayment } from "./toss";
+import { TRPCError } from "@trpc/server";
 
 // ─── Payment item builder ─────────────────────────────────────────────────────
 export interface CreatePaymentItemInput {
@@ -273,5 +279,59 @@ export async function cancelReservationsForTrip(trip: Trip): Promise<void> {
     if (reservation.pointsUsed > 0) {
       await addPoints(reservation.userId, reservation.pointsUsed, "refund", "트립 취소로 인한 포인트 환불", String(reservation.id));
     }
+  }
+}
+
+// 관리자 단건 취소 — D-5 취소창을 우회해 항상 전액 환불(운영자 귀책/불가항력).
+// reservations.adminCancel(개별 예약)과 번개팅 이용제한(restrict) 시 미확정 예약
+// 정리가 공유한다 — 취소·환불 로직은 여기 한 곳뿐(§7: 번개팅 전용 환불 로직 금지).
+export async function adminCancelReservation(
+  reservationId: number,
+  adminId: number,
+  reason?: string
+): Promise<void> {
+  const res = await getReservationById(reservationId);
+  if (!res) throw new TRPCError({ code: "NOT_FOUND" });
+  if (res.status === "cancelled") throw new TRPCError({ code: "BAD_REQUEST", message: "이미 취소된 예약입니다." });
+
+  const trip = await getTripById(res.tripId);
+  if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
+
+  const now = new Date();
+  const payment = await getLatestPaymentByReservationId(res.id);
+  if (payment) {
+    const items = await getPaymentItemsByPaymentId(payment.id);
+    const refundTotal = items.reduce(
+      (sum, item) => sum + computeRefundableAmount(item, trip, res.createdAt, now, "admin"),
+      0
+    );
+    if (payment.status === "paid") {
+      try {
+        await refundTossPaymentIfNeeded(payment, refundTotal, "관리자 취소 전액 환불");
+      } catch (error) {
+        console.error(`[adminCancelReservation] toss refund failed for payment ${payment.id}:`, error);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "토스 환불 처리에 실패했습니다. 잠시 후 다시 시도해주세요.",
+        });
+      }
+    }
+    await updatePaymentStatus(payment.id, "cancelled", {
+      cancelledAt: now,
+      cancelReason: "admin",
+      cancelNote: `관리자(#${adminId}) 취소${reason ? `: ${reason}` : ""} (환불액 ${refundTotal}원)`,
+    });
+  }
+  await decrementTripCount(res.tripId, res.seats);
+
+  if (res.pointsUsed > 0) {
+    await addPoints(res.userId, res.pointsUsed, "refund", "관리자 취소로 인한 포인트 환불", String(res.id));
+  }
+
+  const referral = await getReferralByReservationId(res.id);
+  if (referral && referral.status === "completed") {
+    await addPoints(referral.referrerId, -referral.referrerPoints, "usage", "예약 취소로 인한 추천 적립 회수", String(res.id));
+    await addPoints(referral.refereeId, -referral.refereePoints, "usage", "예약 취소로 인한 추천 적립 회수", String(res.id));
+    await updateReferralStatus(referral.id, "cancelled");
   }
 }
