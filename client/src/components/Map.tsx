@@ -135,6 +135,21 @@ export function MapView({
   );
 }
 
+/**
+ * 지정 좌표가 지도 "정중앙"에 오도록 이동한다.
+ * Kakao 지도는 생성 이후 컨테이너 크기가 바뀌면(폰트 로딩·레이아웃 변동 등) 내부
+ * 크기 캐시가 어긋나 setCenter가 시각적으로 중앙에서 벗어나 보일 수 있다 —
+ * 항상 relayout()으로 크기를 재계산한 뒤 센터를 잡는다. 레벨을 함께 바꿀 때도
+ * setLevel → setCenter 순서로 호출해 최종 중심이 정확히 좌표에 오게 한다.
+ */
+export function centerMapOn(map: any, position: MapLatLng, level?: number) {
+  const { kakao } = window;
+  if (!map || !kakao?.maps) return;
+  map.relayout();
+  if (level != null) map.setLevel(level);
+  map.setCenter(new kakao.maps.LatLng(position.lat, position.lng));
+}
+
 export interface KakaoPlaceResult {
   id: string;
   place_name: string;

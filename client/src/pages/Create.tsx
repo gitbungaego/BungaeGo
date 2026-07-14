@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
-import { MapView, searchKeyword, type KakaoPlaceResult } from "@/components/Map";
+import { MapView, centerMapOn, searchKeyword, type KakaoPlaceResult } from "@/components/Map";
 import { ImageUrlField } from "@/components/ImageUrlField";
 import { CATEGORY_LABELS } from "@/lib/constants";
 import { GENDER_MODE_LABELS, GENDER_MODE_OPTIONS } from "@/lib/bungaeting";
@@ -113,11 +113,12 @@ export default function CreatePage() {
     setShowPlaceDropdown(false);
 
     if (map && window.kakao) {
-      const position = new window.kakao.maps.LatLng(placeLat, placeLng);
-      map.setCenter(position);
-      map.setLevel(3);
+      // 선택한 장소가 지도 정중앙에 오도록 (relayout 포함 — 컨테이너 크기 캐시 보정).
+      centerMapOn(map, { lat: placeLat, lng: placeLng }, 3);
       if (placeMarker) placeMarker.setMap(null);
-      setPlaceMarker(new window.kakao.maps.Marker({ map, position }));
+      setPlaceMarker(
+        new window.kakao.maps.Marker({ map, position: new window.kakao.maps.LatLng(placeLat, placeLng) })
+      );
     }
   };
 

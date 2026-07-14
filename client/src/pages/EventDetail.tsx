@@ -93,10 +93,14 @@ export default function EventDetailPage({ id }: Props) {
     const bounds = new window.kakao.maps.LatLngBounds();
     let hasBounds = false;
 
-    if (event.lat && event.lng) {
-      const pos = new window.kakao.maps.LatLng(Number(event.lat), Number(event.lng));
-      markersRef.current.push(createArrivalMarker(map, { lat: Number(event.lat), lng: Number(event.lng) }, `${event.venue} (도착지)`));
-      bounds.extend(pos);
+    // 공연장(도착지)이 있으면 지도 "정중앙"이 공연장이 되도록 한다: 각 탑승장을
+    // bounds에 넣을 때 공연장 기준 대칭점도 함께 넣으면 bounds의 중심이 정확히
+    // 공연장 좌표가 되면서도 모든 탑승장이 화면 안에 들어온다.
+    const venue = event.lat && event.lng ? { lat: Number(event.lat), lng: Number(event.lng) } : null;
+
+    if (venue) {
+      markersRef.current.push(createArrivalMarker(map, venue, `${event.venue} (도착지)`));
+      bounds.extend(new window.kakao.maps.LatLng(venue.lat, venue.lng));
       hasBounds = true;
     }
 
@@ -120,10 +124,20 @@ export default function EventDetailPage({ id }: Props) {
       markersRef.current.push(marker);
       clusterable.push(marker);
       bounds.extend(new window.kakao.maps.LatLng(Number(bp.lat), Number(bp.lng)));
+      if (venue) {
+        // 공연장 기준 대칭점도 포함 → bounds 중심 = 공연장 (정중앙 유지).
+        bounds.extend(
+          new window.kakao.maps.LatLng(2 * venue.lat - Number(bp.lat), 2 * venue.lng - Number(bp.lng))
+        );
+      }
       hasBounds = true;
     });
 
-    if (hasBounds) map.setBounds(bounds);
+    if (hasBounds) {
+      // relayout: 컨테이너 크기 캐시가 어긋나면 중심이 시각적으로 밀려 보이는 것 보정.
+      map.relayout();
+      map.setBounds(bounds);
+    }
 
     if (clusterable.length > 0 && window.kakao.maps.MarkerClusterer) {
       clustererRef.current = new window.kakao.maps.MarkerClusterer({

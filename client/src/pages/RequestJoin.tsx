@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
-import { MapView, searchKeyword, type KakaoPlaceResult } from "@/components/Map";
+import { MapView, centerMapOn, searchKeyword, type KakaoPlaceResult } from "@/components/Map";
 import { formatPrice, formatDateTime } from "@/lib/constants";
 import { ArrowLeft, ArrowRight, CheckCircle2, MapPin, Minus, Plus, Search } from "lucide-react";
 import { Link } from "wouter";
@@ -124,11 +124,10 @@ export default function RequestJoinPage({ eventId }: Props) {
     setShowPlaceDropdown(false);
 
     if (map && window.kakao) {
-      const position = new window.kakao.maps.LatLng(lat, lng);
-      map.setCenter(position);
-      map.setLevel(3);
+      // 선택한 출발지가 지도 정중앙에 오도록 (relayout 포함).
+      centerMapOn(map, { lat, lng }, 3);
       if (marker) marker.setMap(null);
-      setMarker(new window.kakao.maps.Marker({ map, position }));
+      setMarker(new window.kakao.maps.Marker({ map, position: new window.kakao.maps.LatLng(lat, lng) }));
     }
   };
 
@@ -136,10 +135,11 @@ export default function RequestJoinPage({ eventId }: Props) {
   // handles the marker itself for dropdown picks).
   useEffect(() => {
     if (!map || !window.kakao || marker || originLat === null || originLng === null) return;
-    const position = new window.kakao.maps.LatLng(originLat, originLng);
-    map.setCenter(position);
-    map.setLevel(3);
-    setMarker(new window.kakao.maps.Marker({ map, position }));
+    // 프리필된 출발지도 지도 정중앙에 (relayout 포함).
+    centerMapOn(map, { lat: originLat, lng: originLng }, 3);
+    setMarker(
+      new window.kakao.maps.Marker({ map, position: new window.kakao.maps.LatLng(originLat, originLng) })
+    );
   }, [map, marker, originLat, originLng]);
 
   if (!isAuthenticated) {
