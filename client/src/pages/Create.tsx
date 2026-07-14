@@ -22,7 +22,6 @@ import {
   Calendar,
   CheckCircle2,
   MapPin,
-  Minus,
   Plus,
   Search,
   Sparkles,
@@ -33,12 +32,18 @@ import { Link } from "wouter";
 
 const STEPS = [
   { id: 1, label: "이벤트 정보", icon: <Ticket className="h-4 w-4" /> },
-  { id: 2, label: "셔틀 설정", icon: <Bus className="h-4 w-4" /> },
+  { id: 2, label: "출발 설정", icon: <Bus className="h-4 w-4" /> },
   { id: 3, label: "탑승 포인트", icon: <MapPin className="h-4 w-4" /> },
   { id: 4, label: "확인", icon: <CheckCircle2 className="h-4 w-4" /> },
 ];
 
 const CATEGORIES = ["concert", "sports", "festival", "rally", "exhibition", "other"] as const;
+
+// 인원·요금은 차량(버스 좌석)에 따라 운영자가 추후 확정 — 생성 시엔 기본값으로 자동
+// 설정하고 입력받지 않는다. 수정은 관리자 편집(TripEditDialog / bungaeting.admin.updateTrip)으로.
+const STANDARD_DEFAULTS = { minCount: 20, maxCount: 45, price: 15000 };
+// 번개팅 요금: 스펙 §1 일반 대비 +20,000원 고정. 반반 정원은 maxCount 남녀 균등 분할(16→남8·여8).
+const BUNGAETING_DEFAULTS = { minCount: 12, maxCount: 16, price: 45000 };
 
 interface BoardingPointInput {
   name: string;
@@ -116,10 +121,7 @@ export default function CreatePage() {
     }
   };
 
-  // Step 2: Trip settings
-  const [minCount, setMinCount] = useState(20);
-  const [maxCount, setMaxCount] = useState(45);
-  const [price, setPrice] = useState(15000);
+  // Step 2: Departure settings (인원·요금은 기본값 자동 — 입력받지 않음)
   const [departureDate, setDepartureDate] = useState("");
   const [departureTime, setDepartureTime] = useState("16:00");
   const [isRoundTrip, setIsRoundTrip] = useState(true);
@@ -129,17 +131,17 @@ export default function CreatePage() {
   const [boardingPoints, setBoardingPoints] = useState<BoardingPointInput[]>([]);
 
   // 번개팅 모드 (동행·친목 회차). FEATURE 플래그 뒤에서만 노출.
+  // 정원 숫자는 입력받지 않는다 — 반반 "비율"만 선택하고 좌석은 차량에 따라 추후 확정.
   const bungaetingEnabled = import.meta.env.VITE_FEATURE_BUNGAETING === "true";
   const [bungaetingMode, setBungaetingMode] = useState(false);
   const [genderMode, setGenderMode] = useState<(typeof GENDER_MODE_OPTIONS)[number]>("half");
-  const [genderCapM, setGenderCapM] = useState(8);
-  const [genderCapF, setGenderCapF] = useState(8);
-  const [genderMinM, setGenderMinM] = useState(6);
-  const [genderMinF, setGenderMinF] = useState(6);
-  const [ageMin, setAgeMin] = useState<string>("");
+  const [ageMin, setAgeMin] = useState<string>("20"); // 성인 기본 20살 이상
   const [ageMax, setAgeMax] = useState<string>("");
   const [openChatUrl, setOpenChatUrl] = useState("");
   const isHalf = genderMode === "half";
+  // 반반 정원 파생값 (기본 총원 균등 분할) — 표시·전송 양쪽에서 사용.
+  const derivedCap = BUNGAETING_DEFAULTS.maxCount / 2;
+  const derivedMin = BUNGAETING_DEFAULTS.minCount / 2;
 
   const createEvent = trpc.events.create.useMutation();
   const createTrip = trpc.trips.create.useMutation();
@@ -159,7 +161,7 @@ export default function CreatePage() {
 
   const canProceed = () => {
     if (step === 1) return title.length >= 2 && eventDate && venue.length >= 2;
-    if (step === 2) return minCount > 0 && maxCount >= minCount && price >= 0 && departureDate;
+    if (step === 2) return !!departureDate;
     return true;
   };
 
@@ -182,18 +184,19 @@ export default function CreatePage() {
 
       const departureMs = new Date(`${departureDate}T${departureTime}`).getTime();
       // 번개팅 모드면 번개팅 회차로 생성(성비 모드/나이밴드/오픈채팅 포함), 아니면 표준 셔틀.
+      // 인원·요금·정원은 화면에서 받지 않고 기본값 자동 전송 (차량 확정 후 관리자 편집).
       const { id: tripId } = bungaetingMode
         ? await createBungaetingTrip.mutateAsync({
             eventId,
             departureAt: departureMs,
-            price,
-            minCount,
-            maxCount,
+            price: BUNGAETING_DEFAULTS.price,
+            minCount: BUNGAETING_DEFAULTS.minCount,
+            maxCount: BUNGAETING_DEFAULTS.maxCount,
             genderMode,
-            genderCapM: isHalf ? genderCapM : undefined,
-            genderCapF: isHalf ? genderCapF : undefined,
-            genderMinM: isHalf ? genderMinM : undefined,
-            genderMinF: isHalf ? genderMinF : undefined,
+            genderCapM: isHalf ? derivedCap : undefined,
+            genderCapF: isHalf ? derivedCap : undefined,
+            genderMinM: isHalf ? derivedMin : undefined,
+            genderMinF: isHalf ? derivedMin : undefined,
             ageMin: ageMin === "" ? null : Number(ageMin),
             ageMax: ageMax === "" ? null : Number(ageMax),
             openChatUrl: openChatUrl.trim() || undefined,
@@ -201,9 +204,9 @@ export default function CreatePage() {
           })
         : await createTrip.mutateAsync({
             eventId,
-            minCount,
-            maxCount,
-            price,
+            minCount: STANDARD_DEFAULTS.minCount,
+            maxCount: STANDARD_DEFAULTS.maxCount,
+            price: STANDARD_DEFAULTS.price,
             departureAt: departureMs,
             isRoundTrip,
             notes: notes || undefined,
@@ -449,56 +452,10 @@ export default function CreatePage() {
             </div>
           )}
 
-          {/* Step 2: Trip Settings */}
+          {/* Step 2: Departure Settings — 인원·요금은 기본값 자동(차량 확정 후 편집) */}
           {step === 2 && (
             <div className="space-y-4">
-              <h2 className="text-lg font-semibold">셔틀 설정</h2>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label>최소 인원 *</Label>
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => setMinCount(Math.max(1, minCount - 1))} className="h-8 w-8 rounded-lg border flex items-center justify-center hover:bg-muted">
-                      <Minus className="h-3.5 w-3.5" />
-                    </button>
-                    <Input
-                      type="number"
-                      value={minCount}
-                      onChange={(e) => setMinCount(Number(e.target.value))}
-                      className="text-center"
-                    />
-                    <button onClick={() => setMinCount(minCount + 1)} className="h-8 w-8 rounded-lg border flex items-center justify-center hover:bg-muted">
-                      <Plus className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  <Label>최대 인원 *</Label>
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => setMaxCount(Math.max(minCount, maxCount - 1))} className="h-8 w-8 rounded-lg border flex items-center justify-center hover:bg-muted">
-                      <Minus className="h-3.5 w-3.5" />
-                    </button>
-                    <Input
-                      type="number"
-                      value={maxCount}
-                      onChange={(e) => setMaxCount(Number(e.target.value))}
-                      className="text-center"
-                    />
-                    <button onClick={() => setMaxCount(maxCount + 1)} className="h-8 w-8 rounded-lg border flex items-center justify-center hover:bg-muted">
-                      <Plus className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label>1인 요금 (원) *</Label>
-                <Input
-                  type="number"
-                  value={price}
-                  onChange={(e) => setPrice(Number(e.target.value))}
-                  min={0}
-                  step={1000}
-                />
-              </div>
+              <h2 className="text-lg font-semibold">출발 설정</h2>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label>출발 날짜 *</Label>
@@ -543,24 +500,9 @@ export default function CreatePage() {
                   </div>
 
                   {isHalf && (
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1.5">
-                        <Label>남 정원</Label>
-                        <Input type="number" min={1} value={genderCapM} onChange={(e) => setGenderCapM(Number(e.target.value))} />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label>여 정원</Label>
-                        <Input type="number" min={1} value={genderCapF} onChange={(e) => setGenderCapF(Number(e.target.value))} />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label>남 최소 인원</Label>
-                        <Input type="number" min={0} value={genderMinM} onChange={(e) => setGenderMinM(Number(e.target.value))} />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label>여 최소 인원</Label>
-                        <Input type="number" min={0} value={genderMinF} onChange={(e) => setGenderMinF(Number(e.target.value))} />
-                      </div>
-                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      남녀 동수로 모집돼요. 좌석 수는 차량 확정 시 정해집니다.
+                    </p>
                   )}
 
                   <div className="grid grid-cols-2 gap-3">
@@ -670,15 +612,20 @@ export default function CreatePage() {
                 </div>
                 <Separator />
                 <div>
-                  <p className="text-xs text-muted-foreground mb-2 font-medium uppercase tracking-wide">셔틀 설정</p>
+                  <p className="text-xs text-muted-foreground mb-2 font-medium uppercase tracking-wide">출발 설정</p>
                   <div className="space-y-1.5">
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">인원</span>
-                      <span>최소 {minCount}명 / 최대 {maxCount}명</span>
+                      <span className="text-muted-foreground">인원 (기본값)</span>
+                      <span>
+                        최소 {(bungaetingMode ? BUNGAETING_DEFAULTS : STANDARD_DEFAULTS).minCount}명 / 최대{" "}
+                        {(bungaetingMode ? BUNGAETING_DEFAULTS : STANDARD_DEFAULTS).maxCount}명
+                      </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">요금</span>
-                      <span className="font-semibold text-primary">{price.toLocaleString()}원</span>
+                      <span className="text-muted-foreground">요금 (기본값)</span>
+                      <span className="font-semibold text-primary">
+                        {(bungaetingMode ? BUNGAETING_DEFAULTS : STANDARD_DEFAULTS).price.toLocaleString()}원
+                      </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">출발</span>
@@ -704,8 +651,8 @@ export default function CreatePage() {
                         </div>
                         {isHalf && (
                           <div className="flex justify-between">
-                            <span className="text-muted-foreground">정원 / 최소</span>
-                            <span>남 {genderCapM}({genderMinM}) · 여 {genderCapF}({genderMinF})</span>
+                            <span className="text-muted-foreground">정원 / 최소 (기본값)</span>
+                            <span>남 {derivedCap}({derivedMin}) · 여 {derivedCap}({derivedMin})</span>
                           </div>
                         )}
                         {(ageMin || ageMax) && (
