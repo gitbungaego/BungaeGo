@@ -1,9 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { BUNGAETING_PROFILE_STATUSES, GENDER_MODES } from "../../drizzle/schema";
-import type { ThemeConfig } from "@shared/types";
+import { BUNGAETING_PROFILE_STATUSES } from "../../drizzle/schema";
 import {
-  createTrip,
   getAllBungaetingTrips,
   getBungaetingReportById,
   getBungaetingSmsOptInPhones,
@@ -19,37 +17,9 @@ import {
 import { adminCancelReservation } from "../payments";
 import { router } from "../_core/trpc";
 import { bungaetingAdminProcedure } from "./procedure";
-import { buildGenderMap, parseBungaetingConfig, validateBungaetingThemeConfig } from "./policy";
+import { buildGenderMap, buildThemeConfig, parseBungaetingConfig } from "./policy";
+import { bungaetingConfigInput } from "./tripConfigInput";
 import { sendSms } from "./sms";
-
-// 회차 옵션 입력(생성·편집 공용). 성비 모드/정원/최소인원/나이밴드/추가요금.
-const configInput = {
-  genderMode: z.enum(GENDER_MODES),
-  genderCapM: z.number().int().min(0).optional(),
-  genderCapF: z.number().int().min(0).optional(),
-  genderMinM: z.number().int().min(0).optional(),
-  genderMinF: z.number().int().min(0).optional(),
-  ageMin: z.number().int().min(0).max(120).nullable().optional(),
-  ageMax: z.number().int().min(0).max(120).nullable().optional(),
-  feeAmount: z.number().int().min(0).optional(),
-};
-
-function buildThemeConfig(i: {
-  genderMode: (typeof GENDER_MODES)[number];
-  genderCapM?: number; genderCapF?: number; genderMinM?: number; genderMinF?: number;
-  ageMin?: number | null; ageMax?: number | null; feeAmount?: number;
-}): ThemeConfig {
-  const cfg: ThemeConfig = {
-    genderMode: i.genderMode,
-    genderCap: i.genderMode === "half" ? { M: i.genderCapM ?? 0, F: i.genderCapF ?? 0 } : undefined,
-    genderMin: i.genderMode === "half" ? { M: i.genderMinM ?? 0, F: i.genderMinF ?? 0 } : undefined,
-    ageMin: i.ageMin ?? null,
-    ageMax: i.ageMax ?? null,
-    feeAmount: i.feeAmount,
-  };
-  validateBungaetingThemeConfig(cfg); // 서버 검증 (minM<=cap, ageMin<=ageMax 등)
-  return cfg;
-}
 
 // 이용제한 공통 처리: 프로필 restricted + 미확정 회차 예약 취소(전액환불).
 // 이미 확정된 회차는 유지(다른 참가자 피해 방지, spec §7-2). adminCancelReservation
@@ -70,41 +40,8 @@ async function restrictProfileAndCancelUnconfirmed(targetUserId: number, adminId
 }
 
 export const bungaetingAdminRouter = router({
-  // ── 회차 생성/편집 (성비 모드/나이밴드/openChatUrl) ─────────────────────────────
-  createTrip: bungaetingAdminProcedure
-    .input(
-      z.object({
-        eventId: z.number(),
-        departureAt: z.number(),
-        returnAt: z.number().optional(),
-        price: z.number().int().min(0).max(1_000_000),
-        minCount: z.number().int().min(1),
-        maxCount: z.number().int().min(1),
-        openChatUrl: z.string().max(500).optional(),
-        notes: z.string().max(300).optional(),
-        ...configInput,
-      }).refine((d) => d.minCount <= d.maxCount, { message: "최소 인원이 최대 인원보다 클 수 없습니다.", path: ["minCount"] })
-    )
-    .mutation(async ({ input, ctx }) => {
-      const themeConfig = buildThemeConfig(input);
-      const id = await createTrip({
-        eventId: input.eventId,
-        mode: "bus",
-        minCount: input.minCount,
-        maxCount: input.maxCount,
-        price: input.price,
-        departureAt: new Date(input.departureAt),
-        returnAt: input.returnAt ? new Date(input.returnAt) : undefined,
-        isRoundTrip: !!input.returnAt,
-        theme: "bungaeting",
-        themeConfig,
-        openChatUrl: input.openChatUrl,
-        notes: input.notes,
-        creatorId: ctx.user.id,
-      });
-      return { id };
-    }),
-
+  // ── 회차 편집 (성비 모드/나이밴드/openChatUrl) ─────────────────────────────────
+  // 생성은 셔틀 만들기의 번개팅 토글(bungaeting.trips.create)로 일원화됨.
   updateTrip: bungaetingAdminProcedure
     .input(
       z.object({
@@ -113,7 +50,7 @@ export const bungaetingAdminRouter = router({
         minCount: z.number().int().min(1).optional(),
         maxCount: z.number().int().min(1).optional(),
         openChatUrl: z.string().max(500).nullable().optional(),
-        ...configInput,
+        ...bungaetingConfigInput,
       })
     )
     .mutation(async ({ input }) => {

@@ -32,6 +32,31 @@ export function validateBungaetingThemeConfig(cfg: ThemeConfig): void {
   if (ageMin != null && ageMax != null && ageMin > ageMax) bad("나이 하한이 상한보다 클 수 없습니다.");
 }
 
+// 관리자/사용자 입력(flat 필드)을 themeConfig로 조립 + 검증. 회차 생성·편집이 공유한다.
+// 반반이 아니면 genderCap/genderMin은 무의미하므로 생략(트립 maxCount/minCount 사용).
+export interface BungaetingConfigFields {
+  genderMode: GenderMode;
+  genderCapM?: number;
+  genderCapF?: number;
+  genderMinM?: number;
+  genderMinF?: number;
+  ageMin?: number | null;
+  ageMax?: number | null;
+  feeAmount?: number;
+}
+export function buildThemeConfig(i: BungaetingConfigFields): ThemeConfig {
+  const cfg: ThemeConfig = {
+    genderMode: i.genderMode,
+    genderCap: i.genderMode === "half" ? { M: i.genderCapM ?? 0, F: i.genderCapF ?? 0 } : undefined,
+    genderMin: i.genderMode === "half" ? { M: i.genderMinM ?? 0, F: i.genderMinF ?? 0 } : undefined,
+    ageMin: i.ageMin ?? null,
+    ageMax: i.ageMax ?? null,
+    feeAmount: i.feeAmount,
+  };
+  validateBungaetingThemeConfig(cfg);
+  return cfg;
+}
+
 // trips.themeConfig(JSON)를 번개팅 설정으로 안전하게 파싱. 누락 필드는 기본값.
 export function parseBungaetingConfig(trip: Trip): ThemeConfig {
   const cfg = (trip.themeConfig ?? {}) as Partial<ThemeConfig>;

@@ -14,6 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { MapView, searchKeyword, type KakaoPlaceResult } from "@/components/Map";
 import { ImageUrlField } from "@/components/ImageUrlField";
 import { CATEGORY_LABELS } from "@/lib/constants";
+import { GENDER_MODE_LABELS, GENDER_MODE_OPTIONS } from "@/lib/bungaeting";
 import {
   ArrowLeft,
   ArrowRight,
@@ -24,6 +25,7 @@ import {
   Minus,
   Plus,
   Search,
+  Sparkles,
   Ticket,
   Users,
 } from "lucide-react";
@@ -126,8 +128,22 @@ export default function CreatePage() {
   // Step 3: Boarding points (optional)
   const [boardingPoints, setBoardingPoints] = useState<BoardingPointInput[]>([]);
 
+  // 번개팅 모드 (동행·친목 회차). FEATURE 플래그 뒤에서만 노출.
+  const bungaetingEnabled = import.meta.env.VITE_FEATURE_BUNGAETING === "true";
+  const [bungaetingMode, setBungaetingMode] = useState(false);
+  const [genderMode, setGenderMode] = useState<(typeof GENDER_MODE_OPTIONS)[number]>("half");
+  const [genderCapM, setGenderCapM] = useState(8);
+  const [genderCapF, setGenderCapF] = useState(8);
+  const [genderMinM, setGenderMinM] = useState(6);
+  const [genderMinF, setGenderMinF] = useState(6);
+  const [ageMin, setAgeMin] = useState<string>("");
+  const [ageMax, setAgeMax] = useState<string>("");
+  const [openChatUrl, setOpenChatUrl] = useState("");
+  const isHalf = genderMode === "half";
+
   const createEvent = trpc.events.create.useMutation();
   const createTrip = trpc.trips.create.useMutation();
+  const createBungaetingTrip = trpc.bungaeting.trips.create.useMutation();
   const createBoardingPoint = trpc.boardingPoints.create.useMutation();
 
   if (!isAuthenticated) {
@@ -165,15 +181,33 @@ export default function CreatePage() {
       });
 
       const departureMs = new Date(`${departureDate}T${departureTime}`).getTime();
-      const { id: tripId } = await createTrip.mutateAsync({
-        eventId,
-        minCount,
-        maxCount,
-        price,
-        departureAt: departureMs,
-        isRoundTrip,
-        notes: notes || undefined,
-      });
+      // 번개팅 모드면 번개팅 회차로 생성(성비 모드/나이밴드/오픈채팅 포함), 아니면 표준 셔틀.
+      const { id: tripId } = bungaetingMode
+        ? await createBungaetingTrip.mutateAsync({
+            eventId,
+            departureAt: departureMs,
+            price,
+            minCount,
+            maxCount,
+            genderMode,
+            genderCapM: isHalf ? genderCapM : undefined,
+            genderCapF: isHalf ? genderCapF : undefined,
+            genderMinM: isHalf ? genderMinM : undefined,
+            genderMinF: isHalf ? genderMinF : undefined,
+            ageMin: ageMin === "" ? null : Number(ageMin),
+            ageMax: ageMax === "" ? null : Number(ageMax),
+            openChatUrl: openChatUrl.trim() || undefined,
+            notes: notes || undefined,
+          })
+        : await createTrip.mutateAsync({
+            eventId,
+            minCount,
+            maxCount,
+            price,
+            departureAt: departureMs,
+            isRoundTrip,
+            notes: notes || undefined,
+          });
 
       for (let i = 0; i < boardingPoints.length; i++) {
         const bp = boardingPoints[i];
@@ -194,7 +228,8 @@ export default function CreatePage() {
     }
   };
 
-  const isSubmitting = createEvent.isPending || createTrip.isPending || createBoardingPoint.isPending;
+  const isSubmitting =
+    createEvent.isPending || createTrip.isPending || createBungaetingTrip.isPending || createBoardingPoint.isPending;
 
   const addBoardingPoint = () => {
     setBoardingPoints([...boardingPoints, { name: "", address: "", pickupTime: "" }]);
@@ -211,10 +246,31 @@ export default function CreatePage() {
   return (
     <div className="py-8">
       <div className="container max-w-2xl">
-        <div className="mb-8">
+        <div className="mb-6">
           <h1 className="text-2xl font-bold mb-1">셔틀 만들기</h1>
           <p className="text-muted-foreground text-sm">이벤트 셔틀을 직접 개설하고 참가자를 모집하세요.</p>
         </div>
+
+        {/* 번개팅 모드 토글 — 켜면 성별·나이·성비만 추가 입력하면 동행·친목 회차가 된다.
+            FEATURE 플래그 뒤에서만 노출(프로덕션 OFF면 안 보임 → 기존 흐름 그대로). */}
+        {bungaetingEnabled && (
+          <div
+            className={`mb-6 rounded-xl border p-4 flex items-center justify-between transition-colors ${
+              bungaetingMode ? "border-[#FEE500] bg-[#FFFDF5]" : "border-border bg-card"
+            }`}
+          >
+            <div className="flex items-center gap-2.5">
+              <div className={`h-9 w-9 rounded-lg flex items-center justify-center ${bungaetingMode ? "bg-[#FEE500]" : "bg-muted"}`}>
+                <Sparkles className={`h-5 w-5 ${bungaetingMode ? "text-black" : "text-muted-foreground"}`} />
+              </div>
+              <div>
+                <p className="text-sm font-semibold">번개팅 모드</p>
+                <p className="text-xs text-muted-foreground">함께 탄 사람들과 어울리는 동행 회차로 만들어요 (나이·성비 큐레이션).</p>
+              </div>
+            </div>
+            <Switch checked={bungaetingMode} onCheckedChange={setBungaetingMode} />
+          </div>
+        )}
 
         {/* Step Indicator */}
         <div className="flex items-center justify-between mb-8">
@@ -460,6 +516,74 @@ export default function CreatePage() {
                 </div>
                 <Switch checked={isRoundTrip} onCheckedChange={setIsRoundTrip} />
               </div>
+
+              {/* 번개팅 설정 — 모드 ON일 때만. 성별·나이·성비 (spec §2) */}
+              {bungaetingMode && (
+                <div className="space-y-4 rounded-xl border border-[#FEE500]/60 bg-[#FFFDF5] p-4">
+                  <div className="flex items-center gap-1.5 text-sm font-semibold">
+                    <Sparkles className="h-4 w-4" /> 번개팅 설정
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label>성비 모드</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {GENDER_MODE_OPTIONS.map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => setGenderMode(m)}
+                          className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${
+                            genderMode === m ? "bg-black text-white border-black" : "border-border text-muted-foreground"
+                          }`}
+                        >
+                          {GENDER_MODE_LABELS[m]}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {isHalf && (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label>남 정원</Label>
+                        <Input type="number" min={1} value={genderCapM} onChange={(e) => setGenderCapM(Number(e.target.value))} />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>여 정원</Label>
+                        <Input type="number" min={1} value={genderCapF} onChange={(e) => setGenderCapF(Number(e.target.value))} />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>남 최소 인원</Label>
+                        <Input type="number" min={0} value={genderMinM} onChange={(e) => setGenderMinM(Number(e.target.value))} />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>여 최소 인원</Label>
+                        <Input type="number" min={0} value={genderMinF} onChange={(e) => setGenderMinF(Number(e.target.value))} />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label>나이 하한 (선택)</Label>
+                      <Input type="number" min={0} max={120} value={ageMin} onChange={(e) => setAgeMin(e.target.value)} placeholder="예: 27" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>나이 상한 (선택)</Label>
+                      <Input type="number" min={0} max={120} value={ageMax} onChange={(e) => setAgeMax(e.target.value)} placeholder="예: 35" />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label>카카오 오픈채팅 링크 (선택)</Label>
+                    <Input value={openChatUrl} onChange={(e) => setOpenChatUrl(e.target.value)} placeholder="https://open.kakao.com/o/..." />
+                    <p className="text-xs text-muted-foreground">
+                      확정된 참가자에게만 공개돼요. 직접 오픈채팅방을 만들어 링크를 붙여넣으세요.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-1.5">
                 <Label>안내 메모</Label>
                 <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="탑승 안내, 주의사항 등을 입력하세요." rows={2} />
@@ -566,6 +690,38 @@ export default function CreatePage() {
                     </div>
                   </div>
                 </div>
+                {bungaetingMode && (
+                  <>
+                    <Separator />
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-2 font-medium uppercase tracking-wide flex items-center gap-1">
+                        <Sparkles className="h-3 w-3" /> 번개팅 설정
+                      </p>
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">성비 모드</span>
+                          <span>{GENDER_MODE_LABELS[genderMode]}</span>
+                        </div>
+                        {isHalf && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">정원 / 최소</span>
+                            <span>남 {genderCapM}({genderMinM}) · 여 {genderCapF}({genderMinF})</span>
+                          </div>
+                        )}
+                        {(ageMin || ageMax) && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">나이대</span>
+                            <span>{ageMin || ""}~{ageMax || ""}세</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">오픈채팅</span>
+                          <span>{openChatUrl.trim() ? "링크 등록됨" : "미입력"}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
                 <Separator />
                 <div>
                   <p className="text-xs text-muted-foreground mb-2 font-medium uppercase tracking-wide">탑승 포인트 ({boardingPoints.filter(b => b.name).length}개)</p>
@@ -599,7 +755,7 @@ export default function CreatePage() {
             </Button>
           ) : (
             <Button onClick={handleSubmit} disabled={isSubmitting} className="flex-1">
-              {isSubmitting ? "생성 중..." : "셔틀 개설하기 🚌"}
+              {isSubmitting ? "생성 중..." : bungaetingMode ? "번개팅 회차 개설하기 ✨" : "셔틀 개설하기 🚌"}
             </Button>
           )}
         </div>

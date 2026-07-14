@@ -4,10 +4,12 @@ import { calculateAge } from "@shared/bungaeting/age";
 import { GENDERS, GENDER_MODES } from "../../drizzle/schema";
 import {
   createBungaetingProfile,
+  createTrip,
   getActiveBungaetingTrips,
   getBungaetingPreferenceByUserId,
   getBungaetingProfileByUserId,
   getBungaetingProfilesByUserIds,
+  getEventById,
   getReservationsWithPaymentsByTripId,
   getTripById,
   insertBungaetingReport,
@@ -21,7 +23,8 @@ import { router } from "../_core/trpc";
 import { loadConfirmedTripMembership } from "./access";
 import { bungaetingAdminRouter } from "./adminRouter";
 import { bungaetingProcedure } from "./procedure";
-import { buildGenderMap, parseBungaetingConfig } from "./policy";
+import { buildGenderMap, buildThemeConfig, parseBungaetingConfig } from "./policy";
+import { bungaetingConfigInput } from "./tripConfigInput";
 import { proposalRouter } from "./proposalRouter";
 import { verificationAdapter } from "./verification";
 
@@ -164,6 +167,47 @@ export const bungaetingRouter = router({
 
   // ── 회차 목록/상세 (spec §3-1, §3-3) ──────────────────────────────────────────
   trips: router({
+    // 회차 생성 — 셔틀 만들기의 "번개팅 모드" 토글에서 호출. 로그인 사용자 누구나
+    // 가능(생성자 = 그 회차 오픈채팅 운영자). themeConfig 검증은 buildThemeConfig 공유.
+    create: bungaetingProcedure
+      .input(
+        z.object({
+          eventId: z.number(),
+          departureAt: z.number(),
+          returnAt: z.number().optional(),
+          price: z.number().int().min(0).max(1_000_000),
+          minCount: z.number().int().min(1),
+          maxCount: z.number().int().min(1),
+          openChatUrl: z.string().max(500).optional(),
+          notes: z.string().max(300).optional(),
+          ...bungaetingConfigInput,
+        }).refine((d) => d.minCount <= d.maxCount, {
+          message: "최소 인원이 최대 인원보다 클 수 없습니다.",
+          path: ["minCount"],
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const event = await getEventById(input.eventId);
+        if (!event) throw new TRPCError({ code: "NOT_FOUND", message: "이벤트를 찾을 수 없습니다." });
+        const themeConfig = buildThemeConfig(input); // 검증 포함(BAD_REQUEST)
+        const id = await createTrip({
+          eventId: input.eventId,
+          mode: "bus",
+          minCount: input.minCount,
+          maxCount: input.maxCount,
+          price: input.price,
+          departureAt: new Date(input.departureAt),
+          returnAt: input.returnAt ? new Date(input.returnAt) : undefined,
+          isRoundTrip: !!input.returnAt,
+          theme: "bungaeting",
+          themeConfig,
+          openChatUrl: input.openChatUrl,
+          notes: input.notes,
+          creatorId: ctx.user.id,
+        });
+        return { id };
+      }),
+
     // 홈: 아직 출발 안 한 번개팅 회차 + 잔여석(반반은 성별 분리).
     list: bungaetingProcedure.query(async () => {
       const items = await getActiveBungaetingTrips();

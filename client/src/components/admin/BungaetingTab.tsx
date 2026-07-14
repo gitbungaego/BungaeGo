@@ -3,19 +3,18 @@ import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { GENDER_MODE_LABELS, GENDER_MODE_OPTIONS } from "@/lib/bungaeting";
+import { GENDER_MODE_LABELS } from "@/lib/bungaeting";
 import { formatDateTime, formatPrice } from "@/lib/constants";
 
 // 관리자 번개팅 탭 — 기존 Admin.tsx 탭 구조에 통합되는 컴포넌트(새 페이지 아님).
-// 회차 생성/모집현황·제안전환·신고처리·알림발송. FEATURE OFF면 서버가 NOT_FOUND.
+// 회차 생성은 셔틀 만들기의 "번개팅 모드" 토글로 일원화됨 — 여기선 모집현황·제안전환·
+// 신고처리·알림발송만. FEATURE OFF면 서버가 NOT_FOUND.
 export function BungaetingTab() {
   return (
     <div className="space-y-8">
       <RecruitmentSection />
-      <CreateTripSection />
       <ProposalsSection />
       <ReportsSection />
       <NotificationSection />
@@ -56,80 +55,6 @@ function RecruitmentSection() {
           ))}
         </div>
       )}
-    </SectionShell>
-  );
-}
-
-// ── 회차 생성 ────────────────────────────────────────────────────────────────────
-function CreateTripSection() {
-  const utils = trpc.useUtils();
-  const { data: events } = trpc.events.list.useQuery({ limit: 50 });
-  const [f, setF] = useState({
-    eventId: "", departureAt: "", returnAt: "", price: "45000", minCount: "12", maxCount: "16",
-    genderMode: "half", genderCapM: "8", genderCapF: "8", genderMinM: "6", genderMinF: "6",
-    ageMin: "", ageMax: "", feeAmount: "20000", openChatUrl: "", notes: "",
-  });
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((p) => ({ ...p, [k]: e.target.value }));
-
-  const create = trpc.bungaeting.admin.createTrip.useMutation({
-    onSuccess: () => { utils.bungaeting.admin.listTrips.invalidate(); toast.success("회차를 생성했어요."); },
-    onError: (e) => toast.error(e.message),
-  });
-
-  const isHalf = f.genderMode === "half";
-  const num = (s: string) => (s === "" ? undefined : Number(s));
-
-  return (
-    <SectionShell title="회차 생성">
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1 col-span-2">
-          <Label className="text-xs">행사</Label>
-          <select value={f.eventId} onChange={set("eventId")} className="w-full rounded-md border border-border bg-white px-3 py-2 text-sm">
-            <option value="">행사 선택</option>
-            {events?.map((e) => <option key={e.id} value={e.id}>{e.title}</option>)}
-          </select>
-        </div>
-        <Field label="출발"><Input type="datetime-local" value={f.departureAt} onChange={set("departureAt")} /></Field>
-        <Field label="복귀(선택)"><Input type="datetime-local" value={f.returnAt} onChange={set("returnAt")} /></Field>
-        <Field label="요금"><Input type="number" value={f.price} onChange={set("price")} /></Field>
-        <Field label="성비 모드">
-          <select value={f.genderMode} onChange={set("genderMode")} className="w-full rounded-md border border-border bg-white px-3 py-2 text-sm">
-            {GENDER_MODE_OPTIONS.map((m) => <option key={m} value={m}>{GENDER_MODE_LABELS[m]}</option>)}
-          </select>
-        </Field>
-        <Field label="최소 인원"><Input type="number" value={f.minCount} onChange={set("minCount")} /></Field>
-        <Field label="최대 인원"><Input type="number" value={f.maxCount} onChange={set("maxCount")} /></Field>
-        {isHalf && <>
-          <Field label="남 정원"><Input type="number" value={f.genderCapM} onChange={set("genderCapM")} /></Field>
-          <Field label="여 정원"><Input type="number" value={f.genderCapF} onChange={set("genderCapF")} /></Field>
-          <Field label="남 최소"><Input type="number" value={f.genderMinM} onChange={set("genderMinM")} /></Field>
-          <Field label="여 최소"><Input type="number" value={f.genderMinF} onChange={set("genderMinF")} /></Field>
-        </>}
-        <Field label="나이 하한(선택)"><Input type="number" value={f.ageMin} onChange={set("ageMin")} /></Field>
-        <Field label="나이 상한(선택)"><Input type="number" value={f.ageMax} onChange={set("ageMax")} /></Field>
-        <div className="col-span-2 space-y-1">
-          <Label className="text-xs">카카오 오픈채팅 링크(선택)</Label>
-          <Input value={f.openChatUrl} onChange={set("openChatUrl")} placeholder="https://open.kakao.com/o/..." />
-        </div>
-      </div>
-      <Button
-        className="mt-3 w-full bg-[#FEE500] hover:bg-[#FDD800] text-black border-0"
-        disabled={!f.eventId || !f.departureAt || create.isPending}
-        onClick={() => create.mutate({
-          eventId: Number(f.eventId),
-          departureAt: new Date(f.departureAt).getTime(),
-          returnAt: f.returnAt ? new Date(f.returnAt).getTime() : undefined,
-          price: Number(f.price), minCount: Number(f.minCount), maxCount: Number(f.maxCount),
-          genderMode: f.genderMode as (typeof GENDER_MODE_OPTIONS)[number],
-          genderCapM: num(f.genderCapM), genderCapF: num(f.genderCapF),
-          genderMinM: num(f.genderMinM), genderMinF: num(f.genderMinF),
-          ageMin: num(f.ageMin) ?? null, ageMax: num(f.ageMax) ?? null,
-          feeAmount: num(f.feeAmount), openChatUrl: f.openChatUrl.trim() || undefined,
-          notes: f.notes.trim() || undefined,
-        })}
-      >
-        {create.isPending ? "생성 중…" : "번개팅 회차 생성"}
-      </Button>
     </SectionShell>
   );
 }
@@ -254,7 +179,4 @@ function SectionShell({ title, children }: { title: string; children: React.Reac
       {children}
     </section>
   );
-}
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return <div className="space-y-1"><Label className="text-xs">{label}</Label>{children}</div>;
 }

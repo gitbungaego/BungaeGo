@@ -68,35 +68,6 @@ describe("validateBungaetingThemeConfig", () => {
   });
 });
 
-describe("bungaeting.admin — 권한 게이트", () => {
-  it("일반 사용자는 회차 생성 불가 → FORBIDDEN", async () => {
-    await expect(user().bungaeting.admin.createTrip({
-      eventId: 1, departureAt: Date.now(), price: 45000, minCount: 2, maxCount: 16, genderMode: "any",
-    })).rejects.toMatchObject({ code: "FORBIDDEN" });
-  });
-
-  it("잘못된 themeConfig(반반 정원 0)면 BAD_REQUEST, 트립 미생성", async () => {
-    await expect(admin().bungaeting.admin.createTrip({
-      eventId: 1, departureAt: Date.now(), price: 45000, minCount: 2, maxCount: 16,
-      genderMode: "half", genderCapM: 0, genderCapF: 8,
-    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    expect(db.createTrip).not.toHaveBeenCalled();
-  });
-
-  it("정상 반반 회차 생성", async () => {
-    vi.mocked(db.createTrip).mockResolvedValue(77);
-    const r = await admin().bungaeting.admin.createTrip({
-      eventId: 1, departureAt: Date.now(), price: 45000, minCount: 12, maxCount: 16,
-      genderMode: "half", genderCapM: 8, genderCapF: 8, genderMinM: 6, genderMinF: 6,
-      ageMin: 27, ageMax: 35, openChatUrl: "https://open.kakao.com/o/x",
-    });
-    expect(r).toEqual({ id: 77 });
-    const inserted = vi.mocked(db.createTrip).mock.calls[0][0];
-    expect(inserted.theme).toBe("bungaeting");
-    expect(inserted.openChatUrl).toBe("https://open.kakao.com/o/x");
-  });
-});
-
 describe("bungaeting.admin.setProfileStatus / resolveReport — 이용제한 시 미확정 예약 취소", () => {
   it("restrict 시 미확정 예약만 adminCancelReservation으로 취소", async () => {
     vi.mocked(db.getUnconfirmedBungaetingReservationIdsByUser).mockResolvedValue([101, 102]);
