@@ -9,9 +9,10 @@ import {
   formatPrice,
   formatTime,
 } from "@/lib/constants";
-import { ArrowLeft, Bus, Calendar, MapPin } from "lucide-react";
+import { Bus, Calendar, MapPin } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { MapView, createArrivalMarker, createBoardingPointMarker } from "@/components/Map";
+import { FRAME_FIXED } from "@/components/AppShell";
 import { HeartButton } from "@/components/HeartButton";
 import { PointInterestSection } from "@/components/PointInterestSection";
 import { KAKAO_CHANNEL_CHAT_URL } from "@/const";
@@ -175,13 +176,9 @@ export default function EventDetailPage({ id }: Props) {
   const hasTrips = (trips?.length ?? 0) > 0;
 
   return (
-    <div className="pb-24 lg:pb-10">
-      <div className="container max-w-2xl pt-6">
-        <Link href="/events" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground mb-4 transition-colors">
-          <ArrowLeft className="h-4 w-4" />
-          이벤트 목록
-        </Link>
-
+    <div className="pb-24">
+      <div className="container max-w-2xl pt-4">
+        {/* back 내비게이션은 앱 셸의 상단 헤더가 담당 */}
         {/* ── Block 1: Hero ── */}
         <div className="relative rounded-2xl overflow-hidden border border-border mb-5">
           <div className="relative h-52 sm:h-64">
@@ -351,18 +348,16 @@ export default function EventDetailPage({ id }: Props) {
         </div>
       </div>
 
-      {/* ── Block 4: Fixed bottom CTA (mobile) ── */}
+      {/* ── Block 4: Fixed bottom CTA — 앱 셸 프레임 폭에 맞춰 항상 표시 ── */}
       {hasTrips && lowestPrice !== null && (
-        <div className="fixed bottom-0 inset-x-0 z-30 border-t border-border bg-background/95 backdrop-blur px-4 py-3 lg:hidden">
-          <div className="container max-w-2xl px-0">
-            <Button
-              size="lg"
-              className="w-full text-base font-semibold"
-              onClick={() => stopListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-            >
-              예약하기 · {formatPrice(lowestPrice)}~
-            </Button>
-          </div>
+        <div className={`${FRAME_FIXED} bottom-0 z-30 border-t border-border bg-background/95 backdrop-blur px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]`}>
+          <Button
+            size="lg"
+            className="w-full text-base font-semibold"
+            onClick={() => stopListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          >
+            예약하기 · {formatPrice(lowestPrice)}~
+          </Button>
         </div>
       )}
     </div>

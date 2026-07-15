@@ -4,6 +4,7 @@ import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import AppShell from "./components/AppShell";
 import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
 import Home from "./pages/Home";
@@ -25,7 +26,8 @@ import BungaetingMe from "./pages/bungaeting/Me";
 import BungaetingTripDetail from "./pages/bungaeting/TripDetail";
 import BungaetingProposals from "./pages/bungaeting/Proposals";
 
-function Layout({ children }: { children: React.ReactNode }) {
+// 관리자만 데스크톱 폭 레이아웃(기존 Navbar+Footer) — 나머지 전부 폰 프레임 앱 셸.
+function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen flex flex-col bg-background">
       <Navbar />
@@ -38,41 +40,69 @@ function Layout({ children }: { children: React.ReactNode }) {
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={Home} />
+      {/* ── 탭 페이지 (하단 탭바 표시) ── */}
+      <Route path="/">
+        <AppShell><Home /></AppShell>
+      </Route>
       <Route path="/events">
-        <Layout><EventsPage /></Layout>
-      </Route>
-      <Route path="/events/:id">
-        {(params) => <Layout><EventDetailPage id={Number(params.id)} /></Layout>}
-      </Route>
-      <Route path="/trips/:tripId/book">
-        {(params) => <Layout><BookingPage tripId={Number(params.tripId)} /></Layout>}
-      </Route>
-      <Route path="/reservations/:id/confirm">
-        {(params) => <Layout><BookingConfirmPage reservationId={Number(params.id)} /></Layout>}
-      </Route>
-      <Route path="/events/:id/join">
-        {(params) => <Layout><RequestJoinPage eventId={Number(params.id)} /></Layout>}
-      </Route>
-      <Route path="/requests/:id/confirm">
-        {(params) => <Layout><RequestJoinConfirmPage requestId={Number(params.id)} /></Layout>}
-      </Route>
-      <Route path="/payments/toss/success">
-        <Layout><TossPaymentSuccessPage /></Layout>
-      </Route>
-      <Route path="/payments/toss/fail">
-        <Layout><TossPaymentFailPage /></Layout>
+        <AppShell><EventsPage /></AppShell>
       </Route>
       <Route path="/create">
-        <Layout><CreatePage /></Layout>
+        <AppShell><CreatePage /></AppShell>
       </Route>
       <Route path="/mypage">
-        <Layout><MyPage /></Layout>
+        <AppShell><MyPage /></AppShell>
       </Route>
+
+      {/* ── 서브/신청 플로우 (back 헤더, 탭 숨김 — 앱의 풀스크린 플로우처럼) ── */}
+      <Route path="/events/:id">
+        {(params) => (
+          <AppShell title="이벤트" hideTabs>
+            <EventDetailPage id={Number(params.id)} />
+          </AppShell>
+        )}
+      </Route>
+      <Route path="/trips/:tripId/book">
+        {(params) => (
+          <AppShell title="셔틀 예약" hideTabs>
+            <BookingPage tripId={Number(params.tripId)} />
+          </AppShell>
+        )}
+      </Route>
+      <Route path="/reservations/:id/confirm">
+        {(params) => (
+          <AppShell title="예약 확인" hideTabs>
+            <BookingConfirmPage reservationId={Number(params.id)} />
+          </AppShell>
+        )}
+      </Route>
+      <Route path="/events/:id/join">
+        {(params) => (
+          <AppShell title="참가 신청" hideTabs>
+            <RequestJoinPage eventId={Number(params.id)} />
+          </AppShell>
+        )}
+      </Route>
+      <Route path="/requests/:id/confirm">
+        {(params) => (
+          <AppShell title="신청 확인" hideTabs>
+            <RequestJoinConfirmPage requestId={Number(params.id)} />
+          </AppShell>
+        )}
+      </Route>
+      <Route path="/payments/toss/success">
+        <AppShell title="결제 완료" hideTabs><TossPaymentSuccessPage /></AppShell>
+      </Route>
+      <Route path="/payments/toss/fail">
+        <AppShell title="결제 실패" hideTabs><TossPaymentFailPage /></AppShell>
+      </Route>
+
+      {/* ── 관리자 (유일한 데스크톱 폭 예외) ── */}
       <Route path="/admin">
-        <Layout><AdminPage /></Layout>
+        <AdminLayout><AdminPage /></AdminLayout>
       </Route>
-      {/* 번개팅(동행·친목) — 옐로 톤 서브 레이아웃 + 하단 탭. 회차/제안은 이후 단계. */}
+
+      {/* ── 번개팅 (자체 서브 셸 — 옐로 톤 + 자체 하단 탭) ── */}
       <Route path="/bungaeting">
         <BungaetingLayout><BungaetingHome /></BungaetingLayout>
       </Route>
@@ -91,6 +121,7 @@ function Router() {
       <Route path="/bungaeting/trips/:id">
         {(params) => <BungaetingLayout><BungaetingTripDetail id={Number(params.id)} /></BungaetingLayout>}
       </Route>
+
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

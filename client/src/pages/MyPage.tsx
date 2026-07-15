@@ -111,6 +111,25 @@ export default function MyPage() {
             <ReferralsTab />
           </TabsContent>
         </Tabs>
+
+        {/* 고객센터·정보 — 앱 셸엔 푸터가 없으므로 마이페이지 하단에 배치 */}
+        <div className="mt-10 pt-6 border-t border-border/60 space-y-3">
+          <a
+            href={KAKAO_CHANNEL_CHAT_URL}
+            target="_blank"
+            rel="noopener"
+            className="flex items-center justify-between rounded-xl bg-[#FEE500] px-4 py-3 text-sm font-medium text-black active:scale-[0.98] transition-transform"
+          >
+            <span className="flex items-center gap-2">
+              <MessageCircle className="h-4 w-4" />
+              카카오톡으로 문의하기
+            </span>
+            <span className="text-black/50 text-xs">1:1 채팅</span>
+          </a>
+          <p className="text-center text-[11px] text-muted-foreground">
+            번개GO — 함께 타면 더 저렴하고, 더 빠르게 · © 2026 번개GO
+          </p>
+        </div>
       </div>
     </div>
   );
