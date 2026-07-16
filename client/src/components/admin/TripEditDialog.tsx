@@ -22,6 +22,7 @@ interface AdminTrip {
   minCount: number;
   maxCount: number;
   price: number;
+  oneWayPrice: number | null;
   departureAt: string | Date;
   isRoundTrip: boolean;
   notes: string | null;
@@ -36,7 +37,7 @@ function toLocalInput(d: string | Date): string {
 export function TripEditDialog({ trip, open, onOpenChange }: { trip: AdminTrip | null; open: boolean; onOpenChange: (o: boolean) => void }) {
   const utils = trpc.useUtils();
   const isConfirmed = trip?.status === "confirmed";
-  const [form, setForm] = useState({ minCount: 0, maxCount: 0, price: 0, departureAt: "", notes: "" });
+  const [form, setForm] = useState({ minCount: 0, maxCount: 0, price: 0, oneWayPrice: "", departureAt: "", notes: "" });
   const [forceConfirmedEdit, setForceConfirmedEdit] = useState(false);
 
   useEffect(() => {
@@ -45,6 +46,7 @@ export function TripEditDialog({ trip, open, onOpenChange }: { trip: AdminTrip |
       minCount: trip.minCount,
       maxCount: trip.maxCount,
       price: trip.price,
+      oneWayPrice: trip.oneWayPrice == null ? "" : String(trip.oneWayPrice),
       departureAt: toLocalInput(trip.departureAt),
       notes: trip.notes ?? "",
     });
@@ -60,7 +62,8 @@ export function TripEditDialog({ trip, open, onOpenChange }: { trip: AdminTrip |
     onError: (err) => toast.error(err.message),
   });
 
-  const priceChanged = !!trip && form.price !== trip.price;
+  const formOneWay = form.oneWayPrice === "" ? null : Number(form.oneWayPrice);
+  const priceChanged = !!trip && (form.price !== trip.price || formOneWay !== trip.oneWayPrice);
   const priceLocked = isConfirmed && !forceConfirmedEdit;
 
   const save = () => {
@@ -75,6 +78,7 @@ export function TripEditDialog({ trip, open, onOpenChange }: { trip: AdminTrip |
       maxCount: form.maxCount,
       // Don't send a locked price change at all.
       price: priceLocked ? undefined : form.price,
+      oneWayPrice: priceLocked ? undefined : formOneWay,
       departureAt: form.departureAt ? new Date(form.departureAt).getTime() : undefined,
       notes: form.notes || undefined,
       forceConfirmedEdit,
@@ -111,13 +115,25 @@ export function TripEditDialog({ trip, open, onOpenChange }: { trip: AdminTrip |
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label>1인 요금 (원)</Label>
+            <Label>1인 요금 (원){trip?.isRoundTrip ? " — 왕복" : ""}</Label>
             <Input
               type="number"
               value={form.price}
               disabled={priceLocked}
               onChange={(e) => setForm((f) => ({ ...f, price: Number(e.target.value) }))}
             />
+            {trip?.isRoundTrip && (
+              <>
+                <Label className="pt-1 block">편도 요금 (원) — 행사장행/귀가행</Label>
+                <Input
+                  type="number"
+                  value={form.oneWayPrice}
+                  disabled={priceLocked}
+                  placeholder="비우면 편도 탑승권 미판매"
+                  onChange={(e) => setForm((f) => ({ ...f, oneWayPrice: e.target.value }))}
+                />
+              </>
+            )}
             {isConfirmed && (
               <label className="flex items-center gap-2 text-xs text-muted-foreground pt-1">
                 <input type="checkbox" checked={forceConfirmedEdit} onChange={(e) => setForceConfirmedEdit(e.target.checked)} />

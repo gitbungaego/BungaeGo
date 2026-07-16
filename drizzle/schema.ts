@@ -163,6 +163,9 @@ export const trips = mysqlTable("trips", {
   maxCount: int("maxCount").default(45).notNull(),
   currentCount: int("currentCount").default(0).notNull(),
   price: int("price").notNull(),
+  // 편도(행사장행/귀가행) 탑승권 1인 요금 — 관리자가 지정. NULL이면 왕복 셔틀이라도
+  // 편도 탑승권을 팔지 않는다 (예약창에 왕복만 노출).
+  oneWayPrice: int("oneWayPrice"),
   departureAt: timestamp("departureAt").notNull(),
   returnAt: timestamp("returnAt"),
   isRoundTrip: boolean("isRoundTrip").default(false).notNull(),
@@ -207,6 +210,9 @@ export const reservations = mysqlTable("reservations", {
   tripId: int("tripId").notNull(),
   boardingPointId: int("boardingPointId"),
   seats: int("seats").default(1).notNull(),
+  // 탑승권 종류: round=전 구간(왕복 셔틀이면 왕복), outbound=행사장행, inbound=귀가행.
+  // 편도는 왕복 셔틀(isRoundTrip)에서 oneWayPrice가 설정된 경우에만 판매.
+  ticketType: mysqlEnum("ticketType", ["round", "outbound", "inbound"]).default("round").notNull(),
   seatNo: varchar("seatNo", { length: 10 }),
   pointsUsed: int("pointsUsed").default(0).notNull(),
   passengerName: varchar("passengerName", { length: 100 }),

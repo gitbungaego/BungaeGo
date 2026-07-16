@@ -81,7 +81,15 @@ import {
   computeRefundableAmount,
   refundTossPaymentIfNeeded,
 } from "./payments";
-import { finalizeReservation, finalizeRideRequest, maybeConfirmTrip, validatePointsUsage, type TossOrderContext } from "./reservationFlow";
+import {
+  finalizeReservation,
+  finalizeRideRequest,
+  maybeConfirmTrip,
+  resolveTicketUnitPrice,
+  TICKET_TYPES,
+  validatePointsUsage,
+  type TossOrderContext,
+} from "./reservationFlow";
 import { auditLog } from "./audit";
 import { filterUnservedCandidates } from "./pointInterests";
 import { cancelTossPayment, confirmTossPayment, isTossEnabled, TossApiError } from "./toss";
@@ -384,6 +392,8 @@ export const appRouter = router({
             minCount: z.number().min(1),
             maxCount: z.number().min(1),
             price: z.number().min(0).max(1_000_000, "1인당 요금은 100만원을 초과할 수 없습니다."),
+            // 편도(행사장행/귀가행) 1인 요금 — 미지정이면 편도 탑승권 미판매.
+            oneWayPrice: z.number().min(0).max(1_000_000).optional(),
             departureAt: z.number(),
             returnAt: z.number().optional(),
             isRoundTrip: z.boolean().default(false),
@@ -561,6 +571,7 @@ export const appRouter = router({
           tripId: z.number(),
           boardingPointId: z.number().optional(),
           seats: z.number().min(1).max(8),
+          ticketType: z.enum(TICKET_TYPES).default("round"),
           passengerName: z.string().min(1),
           passengerPhone: z.string().min(1),
           passengerEmail: z.string().email().optional(),
@@ -583,8 +594,9 @@ export const appRouter = router({
         const trip = await getTripById(input.tripId);
         if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
 
+        const unitPrice = resolveTicketUnitPrice(trip, input.ticketType);
         const reservationId = await finalizeReservation(ctx.user, input, async (id) => {
-          const items = buildFareItems({ fareAmount: trip.price * input.seats, pointsUsed: input.pointsUsed });
+          const items = buildFareItems({ fareAmount: unitPrice * input.seats, pointsUsed: input.pointsUsed });
           await createPaymentWithItems({ reservationId: id, method: "mock", chargeType: "prepaid", items });
         });
 
@@ -702,6 +714,7 @@ export const appRouter = router({
             tripId: z.number(),
             boardingPointId: z.number().optional(),
             seats: z.number().min(1).max(8),
+            ticketType: z.enum(TICKET_TYPES).default("round"),
             passengerName: z.string().min(1),
             passengerPhone: z.string().min(1),
             passengerEmail: z.string().email().optional(),
@@ -742,7 +755,8 @@ export const appRouter = router({
           const trip = await getTripById(input.tripId);
           if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
 
-          validatePointsUsage(input.pointsUsed, ctx.user.pointsBalance, trip.price * input.seats);
+          const unitPrice = resolveTicketUnitPrice(trip, input.ticketType);
+          validatePointsUsage(input.pointsUsed, ctx.user.pointsBalance, unitPrice * input.seats);
 
           // Soft availability check so a sold-out trip fails before the user
           // reaches the payment window; the binding check is the seat lock
@@ -752,9 +766,11 @@ export const appRouter = router({
             throw new TRPCError({ code: "BAD_REQUEST", message: "좌석이 부족합니다." });
           }
 
-          fareAmount = trip.price * input.seats;
+          fareAmount = unitPrice * input.seats;
           const event = await getEventById(trip.eventId);
-          orderName = `${event?.title ?? "셔틀"} ${input.seats}석`.slice(0, 100);
+          const ticketLabel =
+            input.ticketType === "outbound" ? " 행사장행" : input.ticketType === "inbound" ? " 귀가행" : "";
+          orderName = `${event?.title ?? "셔틀"} ${input.seats}석${ticketLabel}`.slice(0, 100);
         } else {
           // Track B: 상한가(autoMatchPricePerSeat) 기준 선결제. 배차 확정 시
           // 최종가와의 차액이 부분취소로 환불된다 (admin.matching.commit).
@@ -1440,6 +1456,8 @@ export const appRouter = router({
               minCount: z.number().min(1).optional(),
               maxCount: z.number().min(1).optional(),
               price: z.number().min(0).max(1_000_000, "1인당 요금은 100만원을 초과할 수 없습니다.").optional(),
+              // null = 편도 탑승권 판매 중지 (컬럼을 NULL로 되돌림).
+              oneWayPrice: z.number().min(0).max(1_000_000).nullable().optional(),
               departureAt: z.number().optional(),
               isRoundTrip: z.boolean().optional(),
               notes: z.string().optional(),
@@ -1464,7 +1482,9 @@ export const appRouter = router({
           }
 
           if (trip.status === "confirmed") {
-            const changesPrice = rest.price !== undefined && rest.price !== trip.price;
+            const changesPrice =
+              (rest.price !== undefined && rest.price !== trip.price) ||
+              (rest.oneWayPrice !== undefined && rest.oneWayPrice !== trip.oneWayPrice);
             if (changesPrice && !forceConfirmedEdit) {
               throw new TRPCError({
                 code: "PRECONDITION_FAILED",

@@ -2,7 +2,7 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatPrice, formatDateTime, RESERVATION_STATUS_LABELS } from "@/lib/constants";
+import { formatPrice, formatDateTime, RESERVATION_STATUS_LABELS, TICKET_TYPE_LABELS } from "@/lib/constants";
 import { CheckCircle2, Bus, Calendar, MapPin, Users } from "lucide-react";
 import { Link } from "wouter";
 
@@ -67,6 +67,13 @@ export default function BookingConfirmPage({ reservationId }: Props) {
               <p className="text-xs text-muted-foreground mb-1">좌석 수</p>
               <p className="font-medium">{reservation.seats}명</p>
             </div>
+            {/* 편도 셔틀의 round(전 구간)는 표기 생략 — 왕복 셔틀에서만 의미가 있다. */}
+            {(reservation.ticketType !== "round" || trip?.isRoundTrip) && (
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">탑승권</p>
+                <p className="font-medium">{TICKET_TYPE_LABELS[reservation.ticketType] ?? reservation.ticketType}</p>
+              </div>
+            )}
             {boardingPoint && (
               <div className="col-span-2">
                 <p className="text-xs text-muted-foreground mb-1">탑승 포인트</p>

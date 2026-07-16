@@ -48,6 +48,14 @@ export const TRIP_STATUS_LABELS: Record<string, string> = {
   cancelled: "취소됨",
 };
 
+// 탑승권 종류 (reservations.ticketType). round는 왕복 셔틀에서만 "왕복"으로 표기 —
+// 편도 셔틀의 round(전 구간)는 그 자체가 행사장행이므로 별도 표기하지 않는다.
+export const TICKET_TYPE_LABELS: Record<string, string> = {
+  round: "왕복",
+  outbound: "행사장행",
+  inbound: "귀가행",
+};
+
 export const TRIP_STATUS_COLORS: Record<string, string> = {
   collecting: "bg-blue-50 text-blue-600 border-blue-200",
   confirmed: "bg-emerald-50 text-emerald-600 border-emerald-200",

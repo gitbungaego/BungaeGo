@@ -135,6 +135,8 @@ export default function BookingPage({ tripId }: Props) {
   const [selectedTripId, setSelectedTripId] = useState(tripId);
   const [selectedBpId, setSelectedBpId] = useState<number | null>(initialBpId);
   const [seats, setSeats] = useState(1);
+  // 탑승권 종류 — round=왕복(또는 편도 셔틀의 전 구간), outbound=행사장행, inbound=귀가행.
+  const [ticketType, setTicketType] = useState<"round" | "outbound" | "inbound">("round");
   const [regionSheetOpen, setRegionSheetOpen] = useState(false);
   const [locTab, setLocTab] = useState<"board" | "drop">("board");
   const [noticeTab, setNoticeTab] = useState<"reserve" | "board">("reserve");
@@ -198,6 +200,7 @@ export default function BookingPage({ tripId }: Props) {
     setSelectedTripId(nextTripId);
     setSelectedBpId(sameName?.id ?? nextPoints[0]?.id ?? null);
     setSeats(1);
+    setTicketType("round");
   };
 
   // ── 탑승/하차 위치 지도 ──
@@ -238,10 +241,16 @@ export default function BookingPage({ tripId }: Props) {
     onError: (err) => toast.error(err.message || "주문 생성에 실패했습니다."),
   });
 
+  // 훅 순서상 가드보다 먼저 필요 — 아래 unitPrice와 동일한 규칙으로 계산.
+  const preUnitPrice =
+    ticketType !== "round" && trip?.isRoundTrip && trip?.oneWayPrice != null
+      ? trip.oneWayPrice
+      : trip?.price ?? 0;
+
   const [tossSubmitting, setTossSubmitting] = useState(false);
   const toss = useTossPayment({
     enabled: phase === "pay" && payMethod === "toss" && tossAvailable,
-    amount: (trip?.price ?? 0) * seats - pointsUsed,
+    amount: preUnitPrice * seats - pointsUsed,
   });
 
   if (!isAuthenticated) {
@@ -275,7 +284,26 @@ export default function BookingPage({ tripId }: Props) {
   const remaining = trip.availability.remaining;
   const soldOut = remaining <= 0 || trip.status === "cancelled";
   const maxSeats = Math.max(1, Math.min(8, remaining));
-  const totalBeforePoints = trip.price * seats;
+
+  // 탑승권 선택지: 왕복 셔틀 + 편도가 지정 → 왕복/행사장행/귀가행 3종.
+  // 편도가 미지정이면 왕복만, 편도 셔틀이면 행사장행 단일(내부적으로 round=전 구간).
+  const ticketOptions: { key: "round" | "outbound" | "inbound"; label: string; desc: string; price: number }[] =
+    trip.isRoundTrip
+      ? [
+          { key: "round", label: "왕복", desc: "행사장 갈 때 · 올 때 모두 탑승", price: trip.price },
+          ...(trip.oneWayPrice != null
+            ? ([
+                { key: "outbound", label: "행사장행", desc: "행사장 가는 편만 탑승", price: trip.oneWayPrice },
+                { key: "inbound", label: "귀가행", desc: "행사장에서 돌아오는 편만 탑승", price: trip.oneWayPrice },
+              ] as const)
+            : []),
+        ]
+      : [{ key: "round", label: "행사장행", desc: "행사장 가는 편도 셔틀", price: trip.price }];
+  // 선택한 종류가 선택지에서 사라진 경우(예: 관리자가 편도가 해제) 왕복으로 폴백.
+  const selectedTicket = ticketOptions.find((o) => o.key === ticketType) ?? ticketOptions[0];
+  const unitPrice = selectedTicket.price;
+
+  const totalBeforePoints = unitPrice * seats;
   const maxPointsUsable = Math.min(pointsBalance?.balance ?? 0, totalBeforePoints);
   const totalAmount = totalBeforePoints - pointsUsed;
   const isRushCreatedTrip = isCreatedAfterOwnD5({
@@ -292,6 +320,7 @@ export default function BookingPage({ tripId }: Props) {
       tripId: trip.id,
       boardingPointId: selectedBp?.id ?? undefined,
       seats,
+      ticketType: selectedTicket.key,
       passengerName,
       passengerPhone,
       passengerEmail: passengerEmail || undefined,
@@ -337,7 +366,7 @@ export default function BookingPage({ tripId }: Props) {
         <div className="rounded-2xl border border-border bg-card p-4 mb-5 text-sm space-y-1.5">
           <p className="font-semibold">{event?.title ?? "셔틀 예약"}</p>
           <p className="text-muted-foreground">
-            {rangeDateLabel(trip.departureAt)} {formatTime(trip.departureAt)} 출발 · {seats}명
+            {rangeDateLabel(trip.departureAt)} {formatTime(trip.departureAt)} 출발 · {selectedTicket.label} · {seats}명
           </p>
           <p className="text-muted-foreground flex items-center gap-1">
             <MapPin className="h-3.5 w-3.5" />
@@ -390,6 +419,10 @@ export default function BookingPage({ tripId }: Props) {
               <div className="flex justify-between">
                 <span className="text-muted-foreground">탑승 장소</span>
                 <span className="font-medium">{selectedBp ? selectedBp.name : "미지정"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">탑승권</span>
+                <span className="font-medium">{selectedTicket.label}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">예약 인원</span>
@@ -603,10 +636,44 @@ export default function BookingPage({ tripId }: Props) {
           ) : (
             <p className="text-sm text-muted-foreground">예약 가능한 날짜가 없습니다.</p>
           )}
-          <p className="text-xs text-muted-foreground">
-            {formatTime(trip.departureAt)} 출발 · 1인 {formatPrice(trip.price)}
-            {trip.isRoundTrip ? " · 왕복" : ""}
-          </p>
+          <p className="text-xs text-muted-foreground">{formatTime(trip.departureAt)} 출발</p>
+        </section>
+
+        {/* 탑승권 선택 — 왕복 / 행사장행 / 귀가행 */}
+        <section className="space-y-2">
+          <h2 className="font-bold">탑승권 선택</h2>
+          <div className="space-y-1.5">
+            {ticketOptions.map((o) => {
+              const isSelected = selectedTicket.key === o.key;
+              return (
+                <button
+                  key={o.key}
+                  type="button"
+                  onClick={() => setTicketType(o.key)}
+                  className={`w-full flex items-center justify-between gap-3 rounded-xl border px-4 py-3.5 text-left transition-all ${
+                    isSelected ? "border-primary bg-primary/5" : "border-border"
+                  }`}
+                >
+                  <span className="flex items-center gap-2.5 min-w-0">
+                    <span
+                      className={`h-[18px] w-[18px] rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
+                        isSelected ? "border-primary" : "border-muted-foreground/40"
+                      }`}
+                    >
+                      {isSelected && <span className="h-2 w-2 rounded-full bg-primary" />}
+                    </span>
+                    <span className="min-w-0">
+                      <span className={`block text-sm ${isSelected ? "font-bold" : "font-medium"}`}>{o.label}</span>
+                      <span className="block text-[11px] text-muted-foreground">{o.desc}</span>
+                    </span>
+                  </span>
+                  <span className={`text-sm flex-shrink-0 ${isSelected ? "font-bold text-primary" : "font-medium"}`}>
+                    {formatPrice(o.price)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </section>
 
         {/* 탑승/하차 위치 */}

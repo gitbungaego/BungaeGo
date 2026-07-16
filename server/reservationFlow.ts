@@ -21,6 +21,27 @@ import { notifyTrip } from "./notify/tripMessenger";
 
 const BUNGAETING_THEME = "bungaeting";
 
+// ─── Ticket type (탑승권 종류) ─────────────────────────────────────────────────
+// round = 전 구간(왕복 셔틀이면 왕복, 편도 셔틀이면 그 편도 전체) → trip.price.
+// outbound(행사장행)/inbound(귀가행) = 왕복 셔틀의 한쪽 다리만 → trip.oneWayPrice.
+// 가격은 항상 서버가 트립 값으로 계산한다 — 클라이언트 금액은 신뢰하지 않는다.
+export const TICKET_TYPES = ["round", "outbound", "inbound"] as const;
+export type TicketType = (typeof TICKET_TYPES)[number];
+
+export function resolveTicketUnitPrice(
+  trip: { price: number; isRoundTrip: boolean; oneWayPrice: number | null },
+  ticketType: TicketType
+): number {
+  if (ticketType === "round") return trip.price;
+  if (!trip.isRoundTrip) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "왕복 셔틀이 아니라 편도 탑승권을 선택할 수 없습니다." });
+  }
+  if (trip.oneWayPrice == null) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "이 셔틀은 편도 탑승권을 판매하지 않습니다." });
+  }
+  return trip.oneWayPrice;
+}
+
 // ─── Points usage guard ───────────────────────────────────────────────────────
 export function validatePointsUsage(pointsUsed: number, userBalance: number, fareAmount: number): void {
   if (pointsUsed > userBalance) {
@@ -78,6 +99,8 @@ export interface ReservationOrderInput {
   tripId: number;
   boardingPointId?: number;
   seats: number;
+  /** 미지정(구버전 pending 주문 포함)은 round로 취급. */
+  ticketType?: TicketType;
   passengerName: string;
   passengerPhone: string;
   passengerEmail?: string;
@@ -107,7 +130,9 @@ export async function finalizeReservation(
   const trip = await getTripById(input.tripId);
   if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
 
-  validatePointsUsage(input.pointsUsed, user.pointsBalance, trip.price * input.seats);
+  const ticketType: TicketType = input.ticketType ?? "round";
+  const unitPrice = resolveTicketUnitPrice(trip, ticketType);
+  validatePointsUsage(input.pointsUsed, user.pointsBalance, unitPrice * input.seats);
 
   // Handle referral (doesn't touch seat capacity, safe outside the lock)
   let referrerId: number | undefined;
@@ -158,6 +183,7 @@ export async function finalizeReservation(
       userId: user.id,
       boardingPointId: input.boardingPointId,
       seats: input.seats,
+      ticketType,
       pointsUsed: input.pointsUsed,
       passengerName: input.passengerName,
       passengerPhone: input.passengerPhone,
