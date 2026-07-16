@@ -302,7 +302,7 @@ export default function EventDetailPage({ id }: Props) {
                                 size="sm"
                                 className="flex-shrink-0"
                                 disabled={isFull}
-                                onClick={() => navigate(`/trips/${trip.id}/book`)}
+                                onClick={() => navigate(`/trips/${trip.id}/book?bp=${bp.id}`)}
                               >
                                 {isFull ? "마감" : "예약"}
                               </Button>
