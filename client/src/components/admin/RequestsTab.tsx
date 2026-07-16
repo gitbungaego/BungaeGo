@@ -48,8 +48,8 @@ function EventRequestsSection() {
                 )}
               </div>
               <p className="text-xs text-muted-foreground">
-                {r.startDate}
-                {r.endDate ? ` ~ ${r.endDate}` : ""} · {r.origin} → {r.destination}
+                {r.startDate}{r.startTime ? ` ${r.startTime}` : ""}
+                {r.endDate ? ` ~ ${r.endDate}${r.endTime ? ` ${r.endTime}` : ""}` : ""} · {r.origin} → {r.destination}
               </p>
               <p className="text-xs">
                 희망 도착 시각: {r.arrivalTime ?? "미지정"} · {ARRIVAL_LABEL[r.arrivalPreference] ?? r.arrivalPreference}

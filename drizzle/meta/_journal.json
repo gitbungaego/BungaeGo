@@ -176,6 +176,13 @@
       "when": 1784205693295,
       "tag": "0024_outstanding_the_stranger",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "5",
+      "when": 1784206173153,
+      "tag": "0025_lucky_metal_master",
+      "breakpoints": true
     }
   ]
 }

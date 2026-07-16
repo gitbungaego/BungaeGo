@@ -151,7 +151,9 @@ export const appRouter = router({
           category: z.string().min(1).max(30),
           title: z.string().min(2).max(200),
           startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+          startTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
           endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+          endTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
           destination: z.string().min(2).max(300),
           origin: z.string().min(2).max(300),
           arrivalTime: z.string().max(10).optional(),
@@ -165,9 +167,11 @@ export const appRouter = router({
       .mutation(async ({ input, ctx }) => {
         const id = await createEventRequest({ ...input, userId: ctx.user.id, status: "pending" });
         // 운영자 알림 (mock) — 관리자 콘솔 '신청' 탭에서도 확인 가능.
+        const startLabel = `${input.startDate}${input.startTime ? ` ${input.startTime}` : ""}`;
+        const endLabel = input.endDate ? `~${input.endDate}${input.endTime ? ` ${input.endTime}` : ""}` : "";
         await notifyOwner({
           title: `[번개GO] 이벤트 만들기 신청: ${input.title}`,
-          content: `${input.startDate}${input.endDate ? `~${input.endDate}` : ""} · ${input.origin} → ${input.destination} · 연락처 ${input.phone}`,
+          content: `${startLabel}${endLabel} · ${input.origin} → ${input.destination} · 연락처 ${input.phone}`,
         }).catch(() => false);
         return { id };
       }),

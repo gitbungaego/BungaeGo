@@ -68,6 +68,29 @@ describe("eventRequests.create — 이벤트 만들기 신청", () => {
     expect(vi.mocked(db.createEventRequest).mock.calls[0][0].arrivalTime).toBeUndefined();
   });
 
+  it("startTime/endTime 저장", async () => {
+    vi.mocked(db.createEventRequest).mockResolvedValue(13);
+    await appRouter.createCaller(ctx(7)).eventRequests.create({ ...validRequest, startTime: "09:00", endTime: "18:00" });
+    const saved = vi.mocked(db.createEventRequest).mock.calls[0][0];
+    expect(saved.startTime).toBe("09:00");
+    expect(saved.endTime).toBe("18:00");
+  });
+
+  it("startTime/endTime은 선택 — 생략해도 저장된다", async () => {
+    vi.mocked(db.createEventRequest).mockResolvedValue(14);
+    const r = await appRouter.createCaller(ctx(7)).eventRequests.create(validRequest);
+    expect(r).toEqual({ id: 14 });
+    const saved = vi.mocked(db.createEventRequest).mock.calls[0][0];
+    expect(saved.startTime).toBeUndefined();
+    expect(saved.endTime).toBeUndefined();
+  });
+
+  it("잘못된 시간 형식은 거부", async () => {
+    await expect(appRouter.createCaller(ctx(7)).eventRequests.create({ ...validRequest, startTime: "9:00" }))
+      .rejects.toBeTruthy();
+    expect(db.createEventRequest).not.toHaveBeenCalled();
+  });
+
   it("비로그인 → UNAUTHORIZED", async () => {
     await expect(appRouter.createCaller(ctx(null)).eventRequests.create(validRequest))
       .rejects.toMatchObject({ code: "UNAUTHORIZED" });

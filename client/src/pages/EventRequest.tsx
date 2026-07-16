@@ -23,7 +23,9 @@ export default function EventRequestPage() {
   const [category, setCategory] = useState("");
   const [title, setTitle] = useState("");
   const [startDate, setStartDate] = useState("");
+  const [startTime, setStartTime] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [endTime, setEndTime] = useState("");
   const [destination, setDestination] = useState("");
   const [origin, setOrigin] = useState("");
   const [arrivalTime, setArrivalTime] = useState("");
@@ -105,8 +107,16 @@ export default function EventRequestPage() {
             <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
           </div>
           <div className="space-y-1">
-            <span className="text-xs text-muted-foreground">종료일 (선택)</span>
+            <span className="text-xs text-muted-foreground">시작 시각</span>
+            <Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <span className="text-xs text-muted-foreground">종료일</span>
             <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} min={startDate || undefined} />
+          </div>
+          <div className="space-y-1">
+            <span className="text-xs text-muted-foreground">종료 시각</span>
+            <Input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
           </div>
         </div>
       </section>
@@ -181,7 +191,9 @@ export default function EventRequestPage() {
             category,
             title: title.trim(),
             startDate,
+            startTime: startTime || undefined,
             endDate: endDate || undefined,
+            endTime: endTime || undefined,
             destination: destination.trim(),
             origin: origin.trim(),
             arrivalTime: arrivalTime || undefined,

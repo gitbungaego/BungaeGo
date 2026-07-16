@@ -494,7 +494,10 @@ export const eventRequests = mysqlTable("event_requests", {
   category: varchar("category", { length: 30 }).notNull(),
   title: varchar("title", { length: 200 }).notNull(),
   startDate: date("startDate", { mode: "string" }).notNull(),
+  // 시작/종료 시각(HH:MM, 선택) — 날짜와 분리된 별도 입력(date 컬럼 타입 변경 없이 추가).
+  startTime: varchar("startTime", { length: 5 }),
   endDate: date("endDate", { mode: "string" }),
+  endTime: varchar("endTime", { length: 5 }),
   destination: varchar("destination", { length: 300 }).notNull(),
   origin: varchar("origin", { length: 300 }).notNull(),
   // 희망 도착 시각(HH:MM, 선택) — 이유(arrivalPreference)와 분리된 별도 입력.
