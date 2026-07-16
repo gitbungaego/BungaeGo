@@ -104,6 +104,7 @@ curl -s -o /dev/null -w "%{http_code}\n" "https://bungaego.com/api/oauth/kakao/l
 | 0020 | parallel_bastion | 번개팅 `bungaeting_trip_proposals`, `bungaeting_proposal_interests` 테이블 (회차 제안 + 찜) | 적용됨(실측 2026-07-14) |
 | 0021 | harsh_multiple_man | 번개팅 `bungaeting_reports` 테이블 (프로필 신고, 관리자 처리) | 적용됨(실측 2026-07-14) |
 | 0022 | awesome_quasar | events: `category` enum에 `local_festival`/`expo`/`fair`/`forum` 추가 (홈 카테고리 칩, 순수 추가형) | 적용됨(실측 2026-07-16) |
+| 0023 | medical_mindworm | `event_requests`(이벤트 만들기 신청서) + `shuttle_demands`(희망 탑승지 수요, UNIQUE(eventId,userId)) 테이블 | 적용됨(실측 2026-07-16) |
 
 > **번개팅 배포 상태 (2026-07-15 갱신)**: 번개팅 **①~⑦ 전 단계**의 스키마(0017~0021)·코드가
 > 프로덕션에 배포됐고, **운영자 결정으로 `FEATURE_BUNGAETING`/`VITE_FEATURE_BUNGAETING`를
