@@ -16,6 +16,9 @@ import RequestJoinPage from "./pages/RequestJoin";
 import RequestJoinConfirmPage from "./pages/RequestJoinConfirm";
 import { TossPaymentFailPage, TossPaymentSuccessPage } from "./pages/TossPaymentResult";
 import CreatePage from "./pages/Create";
+import EventRequestPage from "./pages/EventRequest";
+import DemandPage from "./pages/Demand";
+import DemandPickPage from "./pages/DemandPick";
 import MyPage from "./pages/MyPage";
 import AdminPage from "./pages/Admin";
 import BungaetingLayout from "./components/bungaeting/BungaetingLayout";
@@ -47,14 +50,29 @@ function Router() {
       <Route path="/events">
         <AppShell><EventsPage /></AppShell>
       </Route>
-      <Route path="/create">
-        <AppShell><CreatePage /></AppShell>
+      <Route path="/demand">
+        <AppShell><DemandPage /></AppShell>
       </Route>
       <Route path="/mypage">
         <AppShell><MyPage /></AppShell>
       </Route>
 
+      {/* 개설 마법사 — 관리자 전용 (페이지 내부에서 가드) */}
+      <Route path="/create">
+        <AppShell><CreatePage /></AppShell>
+      </Route>
+
       {/* ── 서브/신청 플로우 (back 헤더, 탭 숨김 — 앱의 풀스크린 플로우처럼) ── */}
+      <Route path="/event-request">
+        <AppShell title="이벤트 만들기" hideTabs><EventRequestPage /></AppShell>
+      </Route>
+      <Route path="/demand/:id">
+        {(params) => (
+          <AppShell title="셔틀 만들기" hideTabs>
+            <DemandPickPage eventId={Number(params.id)} />
+          </AppShell>
+        )}
+      </Route>
       <Route path="/events/:id">
         {(params) => (
           <AppShell title="이벤트" hideTabs>

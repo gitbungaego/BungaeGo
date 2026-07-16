@@ -476,6 +476,60 @@ export const consents = mysqlTable(
 export type Consent = typeof consents.$inferSelect;
 export type InsertConsent = typeof consents.$inferInsert;
 
+// ─── Event Requests (이벤트 만들기 신청) ────────────────────────────────────────
+// 번개고에 아직 등록되지 않은 행사의 셔틀을 원할 때 사용자가 제출하는 요청서.
+// 운영자가 관리자 콘솔에서 검토 후 실제 이벤트/셔틀로 개설한다.
+export const ARRIVAL_PREFERENCES = [
+  "md_sale", // MD 판매시간에 도착하고 싶어요
+  "ktx", // KTX 타야 해서 정시에 출발하고 싶어요
+  "ticket_booth", // 티켓부스 오픈시간에 맞춰 도착하고 싶어요
+  "flexible", // 공연 지연에 따라 출발시간이 변경됐으면 좋겠어요
+  "etc", // 기타 (자유 입력)
+] as const;
+export type ArrivalPreference = (typeof ARRIVAL_PREFERENCES)[number];
+
+export const eventRequests = mysqlTable("event_requests", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  category: varchar("category", { length: 30 }).notNull(),
+  title: varchar("title", { length: 200 }).notNull(),
+  startDate: date("startDate", { mode: "string" }).notNull(),
+  endDate: date("endDate", { mode: "string" }),
+  destination: varchar("destination", { length: 300 }).notNull(),
+  origin: varchar("origin", { length: 300 }).notNull(),
+  arrivalPreference: mysqlEnum("arrivalPreference", ARRIVAL_PREFERENCES).notNull(),
+  arrivalNote: varchar("arrivalNote", { length: 300 }),
+  inquiry: varchar("inquiry", { length: 500 }),
+  phone: varchar("phone", { length: 20 }).notNull(),
+  email: varchar("email", { length: 320 }).notNull(),
+  status: mysqlEnum("status", ["pending", "done"]).default("pending").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type EventRequest = typeof eventRequests.$inferSelect;
+export type InsertEventRequest = typeof eventRequests.$inferInsert;
+
+// ─── Shuttle Demands (셔틀 만들기 — 희망 탑승지 수요 신청) ──────────────────────
+// 등록된 이벤트 중 원하는 노선이 없을 때, 카카오T 수요조사식으로 희망 탑승지를
+// 신청한다. 유저당 이벤트당 1건(UNIQUE) — 재신청 시 upsert로 교체.
+export const shuttleDemands = mysqlTable(
+  "shuttle_demands",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    eventId: int("eventId").notNull(),
+    userId: int("userId").notNull(),
+    // capital = 서울/수도권 역 선택, other = 그 외 지역 선택
+    area: mysqlEnum("area", ["capital", "other"]).notNull(),
+    // 선택한 역/지역명 또는 직접 입력한 거점
+    stopLabel: varchar("stopLabel", { length: 100 }).notNull(),
+    // 그 외 지역에서 출발 동네(OO동) — 선택 입력
+    neighborhood: varchar("neighborhood", { length: 100 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("shuttle_demands_event_user_idx").on(table.eventId, table.userId)]
+);
+export type ShuttleDemand = typeof shuttleDemands.$inferSelect;
+export type InsertShuttleDemand = typeof shuttleDemands.$inferInsert;
+
 // ─── Bungaeting (동행·친목 서브서비스) ──────────────────────────────────────────
 // 소개팅·매칭이 아니라 "함께 탄 사람끼리 어울리는" 동행 서비스 (spec §1, §4 참고).
 // 프로필(사진·나이·성별)은 번개고 대절 데이터와 분리 저장 — 조인 키(userId)만 유지 (spec §5).

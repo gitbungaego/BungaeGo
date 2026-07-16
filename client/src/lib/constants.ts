@@ -91,6 +91,32 @@ export const formatTime = (date: Date | string | number) => {
   return d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
 };
 
+// ── 셔틀 만들기(수요 모집) — 희망 탑승지 목록 (카카오T 수요조사 참고) ─────────────
+export const DEMAND_STATIONS: { group: string; stations: string[] }[] = [
+  {
+    group: "서울",
+    stations: ["강남역", "노원역", "마곡역", "사당역", "서울역", "신도림역", "왕십리역", "잠실역", "합정역"],
+  },
+  {
+    group: "경기",
+    stations: ["동탄역", "미금역", "백석역", "수원역", "안양역", "영통역", "평택역"],
+  },
+  { group: "인천", stations: ["부평역"] },
+];
+
+export const DEMAND_REGIONS = [
+  "강릉", "경주", "광주", "대구", "대전", "부산", "울산", "원주", "전주", "창원", "천안", "청주",
+];
+
+// ── 이벤트 만들기 신청 — 도착 희망 사유 ─────────────────────────────────────────
+export const ARRIVAL_PREF_OPTIONS: { key: string; label: string }[] = [
+  { key: "md_sale", label: "MD 판매시간에 도착하고 싶어요" },
+  { key: "ktx", label: "KTX 타야 해서 정시에 출발하고 싶어요" },
+  { key: "ticket_booth", label: "티켓부스 오픈시간에 맞춰 도착하고 싶어요" },
+  { key: "flexible", label: "공연 지연에 따라 출발시간이 변경됐으면 좋겠어요" },
+  { key: "etc", label: "기타" },
+];
+
 // 카카오T 리스트식 짧은 날짜: 26.09.04
 export const formatShortDate = (date: Date | string | number) => {
   const d = new Date(date);

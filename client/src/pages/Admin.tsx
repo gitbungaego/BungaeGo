@@ -28,6 +28,7 @@ import {
   Bus,
   Calendar,
   CheckCircle2,
+  Inbox,
   Route as RouteIcon,
   Shield,
   Sparkles,
@@ -38,6 +39,7 @@ import {
 import { Link } from "wouter";
 import { MatchingTab } from "@/components/admin/MatchingTab";
 import { BungaetingTab } from "@/components/admin/BungaetingTab";
+import { RequestsTab } from "@/components/admin/RequestsTab";
 import { EventEditDialog } from "@/components/admin/EventEditDialog";
 import { EventDeleteDialog } from "@/components/admin/EventDeleteDialog";
 import { AutoMatchDialog } from "@/components/admin/AutoMatchDialog";
@@ -105,6 +107,10 @@ export default function AdminPage() {
               <RouteIcon className="h-3.5 w-3.5" />
               배차 매칭
             </TabsTrigger>
+            <TabsTrigger value="requests" className="gap-1.5">
+              <Inbox className="h-3.5 w-3.5" />
+              신청
+            </TabsTrigger>
             {import.meta.env.VITE_FEATURE_BUNGAETING === "true" && (
               <TabsTrigger value="bungaeting" className="gap-1.5">
                 <Sparkles className="h-3.5 w-3.5" />
@@ -127,6 +133,9 @@ export default function AdminPage() {
           </TabsContent>
           <TabsContent value="matching" className="mt-4">
             <MatchingTab />
+          </TabsContent>
+          <TabsContent value="requests" className="mt-4">
+            <RequestsTab />
           </TabsContent>
           {import.meta.env.VITE_FEATURE_BUNGAETING === "true" && (
             <TabsContent value="bungaeting" className="mt-4">

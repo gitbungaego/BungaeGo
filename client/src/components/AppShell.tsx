@@ -29,7 +29,8 @@ const bungaetingEnabled = import.meta.env.VITE_FEATURE_BUNGAETING === "true";
 const TABS = [
   { href: "/", label: "홈", icon: Home, exact: true },
   { href: "/events", label: "이벤트", icon: CalendarDays, exact: false },
-  { href: "/create", label: "만들기", icon: PlusCircle, exact: false },
+  // 만들기 = 셔틀 만들기(수요 모집). 실제 이벤트/셔틀 개설(/create)은 관리자 전용.
+  { href: "/demand", label: "만들기", icon: PlusCircle, exact: false },
   ...(bungaetingEnabled ? [{ href: "/bungaeting", label: "번개팅", icon: Sparkles, exact: false }] : []),
   { href: "/mypage", label: "마이", icon: User, exact: false },
 ];

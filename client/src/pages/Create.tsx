@@ -171,6 +171,29 @@ export default function CreatePage() {
     );
   }
 
+  // 실제 이벤트/셔틀 개설은 운영자 전용. 일반 사용자는 이벤트 만들기(신청)와
+  // 셔틀 만들기(수요 모집)로 유도한다.
+  if (user?.role !== "admin") {
+    return (
+      <div className="py-20 text-center space-y-4 container max-w-md">
+        <p className="font-semibold">셔틀 개설은 번개GO 운영팀이 진행해요</p>
+        <p className="text-sm text-muted-foreground">
+          원하는 행사가 없다면 '이벤트 만들기'로 신청하고,
+          <br />
+          노선이 필요하면 '셔틀 만들기'에서 수요를 신청해 주세요.
+        </p>
+        <div className="flex gap-2 justify-center">
+          <Button asChild>
+            <Link href="/event-request">이벤트 만들기</Link>
+          </Button>
+          <Button variant="outline" asChild>
+            <Link href="/demand">셔틀 만들기</Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   const canProceed = () => {
     if (step === 1) return title.length >= 2 && eventDate && venue.length >= 2;
     if (step === 2) return !!departureDate;

@@ -21,6 +21,10 @@ import {
   InsertCluster,
   InsertConsent,
   InsertEvent,
+  InsertEventRequest,
+  InsertShuttleDemand,
+  EventRequest,
+  ShuttleDemand,
   InsertPoint,
   InsertReferral,
   InsertReservation,
@@ -52,6 +56,7 @@ import {
   clusters,
   consents,
   eventLikes,
+  eventRequests,
   events,
   paymentItems,
   payments,
@@ -61,6 +66,7 @@ import {
   referrals,
   reservations,
   rideRequests,
+  shuttleDemands,
   stopCandidates,
   trips,
   users,
@@ -2181,4 +2187,99 @@ export async function getAllBungaetingTrips(): Promise<Trip[]> {
     .from(trips)
     .where(eq(trips.theme, "bungaeting"))
     .orderBy(desc(trips.createdAt));
+}
+
+// ─── Event Requests (이벤트 만들기 신청) ────────────────────────────────────────
+export async function createEventRequest(data: Omit<InsertEventRequest, "id">): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const result = await db.insert(eventRequests).values(data);
+  return (result[0] as any).insertId;
+}
+
+export async function getEventRequests(): Promise<EventRequest[]> {
+  const db = await getDb();
+  if (!db) return [];
+  // pending 먼저, 최신순.
+  return db.select().from(eventRequests).orderBy(eventRequests.status, desc(eventRequests.createdAt));
+}
+
+export async function setEventRequestStatus(id: number, status: EventRequest["status"]): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(eventRequests).set({ status }).where(eq(eventRequests.id, id));
+}
+
+// ─── Shuttle Demands (셔틀 만들기 — 희망 탑승지 수요) ───────────────────────────
+// 유저당 이벤트당 1건 — 재신청 시 선택을 교체(upsert). UNIQUE(eventId,userId).
+export async function upsertShuttleDemand(
+  eventId: number,
+  userId: number,
+  data: Pick<InsertShuttleDemand, "area" | "stopLabel" | "neighborhood">
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db
+    .insert(shuttleDemands)
+    .values({ eventId, userId, ...data })
+    .onDuplicateKeyUpdate({
+      set: { area: data.area, stopLabel: data.stopLabel, neighborhood: data.neighborhood ?? null },
+    });
+}
+
+export async function getShuttleDemandStatus(
+  eventId: number,
+  userId?: number
+): Promise<{ count: number; mine: ShuttleDemand | null }> {
+  const db = await getDb();
+  if (!db) return { count: 0, mine: null };
+  const [row] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(shuttleDemands)
+    .where(eq(shuttleDemands.eventId, eventId));
+  let mine: ShuttleDemand | null = null;
+  if (userId) {
+    const rows = await db
+      .select()
+      .from(shuttleDemands)
+      .where(and(eq(shuttleDemands.eventId, eventId), eq(shuttleDemands.userId, userId)))
+      .limit(1);
+    mine = rows[0] ?? null;
+  }
+  return { count: Number(row?.count ?? 0), mine };
+}
+
+// 관리자 집계: 이벤트별 수요 수 + 상위 탑승지.
+export interface ShuttleDemandSummaryRow {
+  eventId: number;
+  eventTitle: string;
+  count: number;
+  topStops: string[];
+}
+export async function getShuttleDemandSummary(): Promise<ShuttleDemandSummaryRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const counts = await db
+    .select({ eventId: shuttleDemands.eventId, title: events.title, count: sql<number>`count(*)` })
+    .from(shuttleDemands)
+    .innerJoin(events, eq(shuttleDemands.eventId, events.id))
+    .groupBy(shuttleDemands.eventId, events.title)
+    .orderBy(desc(sql`count(*)`));
+  const result: ShuttleDemandSummaryRow[] = [];
+  for (const c of counts) {
+    const stops = await db
+      .select({ stopLabel: shuttleDemands.stopLabel, n: sql<number>`count(*)` })
+      .from(shuttleDemands)
+      .where(eq(shuttleDemands.eventId, c.eventId))
+      .groupBy(shuttleDemands.stopLabel)
+      .orderBy(desc(sql`count(*)`))
+      .limit(5);
+    result.push({
+      eventId: c.eventId,
+      eventTitle: c.title,
+      count: Number(c.count),
+      topStops: stops.map((s) => `${s.stopLabel}(${Number(s.n)})`),
+    });
+  }
+  return result;
 }

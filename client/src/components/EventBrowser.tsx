@@ -125,10 +125,11 @@ export function filterAndSortEvents<T extends BrowsableEvent>(events: T[], month
 }
 
 // ── 리스트 행 (세로 포스터 3:4 썸네일) ─────────────────────────────────────────
-export function EventRow({ event }: { event: BrowsableEvent }) {
+// href 미지정 시 이벤트 상세로. 수요 모집 플로우에선 /demand/:id 등으로 재사용.
+export function EventRow({ event, href }: { event: BrowsableEvent; href?: string }) {
   return (
     <Link
-      href={`/events/${event.id}`}
+      href={href ?? `/events/${event.id}`}
       className="flex items-center gap-3 rounded-2xl border border-border bg-card px-3 py-2.5 active:scale-[0.99] transition-transform"
     >
       <div className="h-16 w-12 shrink-0 overflow-hidden rounded-lg bg-muted">

@@ -37,8 +37,14 @@ import {
   getLikedEventsByUser,
   getLatestPaymentByRideRequestId,
   getPaidPaymentItemTotalsByType,
+  createEventRequest,
+  getEventRequests,
   getInterestedCandidateIds,
   getPaymentByOrderId,
+  getShuttleDemandStatus,
+  getShuttleDemandSummary,
+  setEventRequestStatus,
+  upsertShuttleDemand,
   getPaymentItemsByPaymentId,
   getPendingRideRequestsByEventId,
   getPointInterestCounts,
@@ -93,7 +99,7 @@ import { executeMatching, getMatchingStopCandidates, RALLY_POINT_CANDIDATE_ID_OF
 import { refundUnmatchedRideRequests } from "./payments";
 import { freezeEventIfUnfrozen } from "./db";
 import { evaluateCancellation, isCreatedAfterOwnD5 } from "@shared/cancellationPolicy";
-import { USER_STATUSES } from "../drizzle/schema";
+import { ARRIVAL_PREFERENCES, USER_STATUSES } from "../drizzle/schema";
 import type { RideRequest, Trip } from "../drizzle/schema";
 
 // ─── Admin guard ─────────────────────────────────────────────────────────────
@@ -136,6 +142,77 @@ export const appRouter = router({
 
   // 번개팅(동행·친목 서브서비스). 전체가 FEATURE_BUNGAETING 플래그 뒤에 있음(기본 OFF).
   bungaeting: bungaetingRouter,
+
+  // ─── 이벤트 만들기 신청 (미등록 행사 요청서) ────────────────────────────────
+  eventRequests: router({
+    create: protectedProcedure
+      .input(
+        z.object({
+          category: z.string().min(1).max(30),
+          title: z.string().min(2).max(200),
+          startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+          endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+          destination: z.string().min(2).max(300),
+          origin: z.string().min(2).max(300),
+          arrivalPreference: z.enum(ARRIVAL_PREFERENCES),
+          arrivalNote: z.string().max(300).optional(),
+          inquiry: z.string().max(500).optional(),
+          phone: z.string().min(9).max(20),
+          email: z.string().email().max(320),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const id = await createEventRequest({ ...input, userId: ctx.user.id, status: "pending" });
+        // 운영자 알림 (mock) — 관리자 콘솔 '신청' 탭에서도 확인 가능.
+        await notifyOwner({
+          title: `[번개GO] 이벤트 만들기 신청: ${input.title}`,
+          content: `${input.startDate}${input.endDate ? `~${input.endDate}` : ""} · ${input.origin} → ${input.destination} · 연락처 ${input.phone}`,
+        }).catch(() => false);
+        return { id };
+      }),
+
+    adminList: adminProcedure.query(() => getEventRequests()),
+
+    setStatus: adminProcedure
+      .input(z.object({ id: z.number(), status: z.enum(["pending", "done"]) }))
+      .mutation(async ({ input }) => {
+        await setEventRequestStatus(input.id, input.status);
+        return { success: true } as const;
+      }),
+  }),
+
+  // ─── 셔틀 만들기 — 희망 탑승지 수요 신청 (카카오T 수요조사식) ──────────────────
+  shuttleDemands: router({
+    // 현황: 이벤트별 신청 수 + (로그인 시) 내 신청 내용.
+    status: publicProcedure
+      .input(z.object({ eventId: z.number() }))
+      .query(async ({ input, ctx }) => {
+        return getShuttleDemandStatus(input.eventId, ctx.user?.id);
+      }),
+
+    // 신청/변경 — 유저당 이벤트당 1건 upsert.
+    upsert: protectedProcedure
+      .input(
+        z.object({
+          eventId: z.number(),
+          area: z.enum(["capital", "other"]),
+          stopLabel: z.string().min(1).max(100),
+          neighborhood: z.string().max(100).optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        const event = await getEventById(input.eventId);
+        if (!event) throw new TRPCError({ code: "NOT_FOUND", message: "이벤트를 찾을 수 없습니다." });
+        await upsertShuttleDemand(input.eventId, ctx.user.id, {
+          area: input.area,
+          stopLabel: input.stopLabel,
+          neighborhood: input.neighborhood?.trim() || null,
+        });
+        return getShuttleDemandStatus(input.eventId, ctx.user.id);
+      }),
+
+    adminSummary: adminProcedure.query(() => getShuttleDemandSummary()),
+  }),
 
   // ─── Auth ──────────────────────────────────────────────────────────────────
   auth: router({

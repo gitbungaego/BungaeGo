@@ -50,25 +50,25 @@ export default function Home() {
           )}
         </h1>
 
-        {/* 빠른 액션 */}
+        {/* 빠른 액션: 이벤트 만들기(미등록 행사 신청) / 셔틀 만들기(수요 모집) */}
         <div className="mt-4 grid grid-cols-2 gap-2.5">
           <Link
-            href="/events"
+            href="/event-request"
             className="flex items-center justify-between rounded-2xl bg-primary text-white p-4 shadow-md shadow-primary/25 active:scale-[0.98] transition-transform"
           >
             <div>
-              <p className="font-semibold text-sm">이벤트 보기</p>
-              <p className="text-[11px] text-white/80 mt-0.5">셔틀 예약하기</p>
+              <p className="font-semibold text-sm">이벤트 만들기</p>
+              <p className="text-[11px] text-white/80 mt-0.5">모든 행사 신청 가능</p>
             </div>
             <CalendarDays className="h-6 w-6 opacity-80" />
           </Link>
           <Link
-            href="/create"
+            href="/demand"
             className="flex items-center justify-between rounded-2xl border border-border bg-card p-4 active:scale-[0.98] transition-transform"
           >
             <div>
               <p className="font-semibold text-sm">셔틀 만들기</p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">직접 노선 개설</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">수요 모집</p>
             </div>
             <Bus className="h-6 w-6 text-primary" />
           </Link>
