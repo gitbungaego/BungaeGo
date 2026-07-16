@@ -1,16 +1,23 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { getLoginUrl } from "@/const";
-import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
+import { useState } from "react";
 import { ArrowRight, Bus, CalendarDays, ChevronRight, MapPin, Share2, Users, Zap } from "lucide-react";
 import { Link } from "wouter";
-import { CATEGORY_COLORS, CATEGORY_LABELS, formatDate } from "@/lib/constants";
+import { CategoryIconChips, EventRow, MonthChips, filterAndSortEvents } from "@/components/EventBrowser";
 
 // 앱 스타일 홈 — 마케팅 랜딩이 아니라 앱 첫 화면처럼: 컴팩트 히어로, 빠른 액션,
 // 가로 스크롤 이벤트 카드. 상단 브랜드 바·하단 탭은 AppShell이 그린다.
 export default function Home() {
   const { user, isAuthenticated } = useAuth();
-  const { data: events } = trpc.events.list.useQuery({ limit: 6 });
+  // 모집중인 셔틀 (카카오T식): 카테고리는 서버 필터, 월/인기는 클라이언트 필터.
+  const [category, setCategory] = useState("all");
+  const [monthKey, setMonthKey] = useState("popular");
+  const { data: events } = trpc.events.list.useQuery({
+    category: category === "all" ? undefined : category,
+    limit: 50,
+  });
+  const visibleEvents = filterAndSortEvents(events ?? [], monthKey).slice(0, 8);
 
   const features = [
     { icon: <Users className="h-4 w-4" />, title: "크라우드소싱 셔틀", desc: "최소 인원 모이면 자동 확정" },
@@ -68,52 +75,30 @@ export default function Home() {
         </div>
       </section>
 
-      {/* 다가오는 이벤트 — 가로 스크롤 카드 */}
-      {events && events.length > 0 && (
-        <section className="pt-2">
-          <div className="flex items-center justify-between px-4 mb-3">
-            <h2 className="text-base font-bold">다가오는 이벤트</h2>
-            <Link href="/events" className="flex items-center text-xs font-medium text-primary">
-              전체 보기 <ChevronRight className="h-3.5 w-3.5" />
-            </Link>
-          </div>
-          <div className="flex gap-3 overflow-x-auto px-4 pb-2 snap-x snap-mandatory scrollbar-none">
-            {events.map((event) => (
-              <Link
-                key={event.id}
-                href={`/events/${event.id}`}
-                className="snap-start shrink-0 w-[240px] rounded-2xl border border-border bg-card overflow-hidden active:scale-[0.98] transition-transform"
-              >
-                <div className="relative h-32 bg-muted overflow-hidden">
-                  {event.imageUrl ? (
-                    <img src={event.imageUrl} alt={event.title} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-primary/10 to-purple-100">
-                      <Bus className="h-10 w-10 text-primary/30" />
-                    </div>
-                  )}
-                  <div className="absolute top-2 left-2">
-                    <Badge
-                      variant="outline"
-                      className={`text-[10px] font-medium border ${CATEGORY_COLORS[event.category] ?? ""} bg-white/90`}
-                    >
-                      {CATEGORY_LABELS[event.category] ?? event.category}
-                    </Badge>
-                  </div>
-                </div>
-                <div className="p-3">
-                  <h3 className="font-semibold text-[13px] leading-snug line-clamp-2 mb-1.5">{event.title}</h3>
-                  <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                    <MapPin className="h-3 w-3 flex-shrink-0" />
-                    <span className="truncate">{event.venue}</span>
-                  </div>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">{formatDate(event.eventDate)}</p>
-                </div>
-              </Link>
+      {/* 모집중인 셔틀 — 카카오T 셔틀 스타일 (카테고리 아이콘 칩 + 월별 필터 + 리스트) */}
+      <section className="px-4 pt-2 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-bold">모집중인 셔틀</h2>
+          <Link href="/events" className="flex items-center text-xs font-medium text-primary">
+            전체 보기 <ChevronRight className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+
+        <CategoryIconChips value={category} onChange={setCategory} />
+        <MonthChips events={events ?? []} value={monthKey} onChange={setMonthKey} />
+
+        {visibleEvents.length > 0 ? (
+          <div className="space-y-2">
+            {visibleEvents.map((event) => (
+              <EventRow key={event.id} event={event} />
             ))}
           </div>
-        </section>
-      )}
+        ) : (
+          <div className="rounded-2xl border border-dashed border-border py-10 text-center text-sm text-muted-foreground">
+            해당 조건의 셔틀이 아직 없어요.
+          </div>
+        )}
+      </section>
 
       {/* 왜 번개GO — 컴팩트 2×2 */}
       <section className="px-4 pt-6">

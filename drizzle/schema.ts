@@ -44,6 +44,7 @@ export type InsertUser = typeof users.$inferInsert;
 export const events = mysqlTable("events", {
   id: int("id").autoincrement().primaryKey(),
   title: varchar("title", { length: 200 }).notNull(),
+  // 카테고리 확장(2026-07): 지역축제/엑스포/박람회/포럼 — 홈 카카오T식 칩 필터와 1:1.
   category: mysqlEnum("category", [
     "concert",
     "sports",
@@ -51,6 +52,10 @@ export const events = mysqlTable("events", {
     "rally",
     "exhibition",
     "other",
+    "local_festival",
+    "expo",
+    "fair",
+    "forum",
   ])
     .default("other")
     .notNull(),

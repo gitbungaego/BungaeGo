@@ -16,7 +16,7 @@ import {
 import { CATEGORY_LABELS } from "@/lib/constants";
 import { ImageUrlField } from "@/components/ImageUrlField";
 
-const CATEGORIES = ["concert", "sports", "festival", "rally", "exhibition", "other"] as const;
+const CATEGORIES = ["concert", "sports", "festival", "local_festival", "rally", "exhibition", "expo", "fair", "forum", "other"] as const;
 
 interface AdminEvent {
   id: number;

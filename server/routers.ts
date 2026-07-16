@@ -215,7 +215,7 @@ export const appRouter = router({
       .input(
         z.object({
           title: z.string().min(2),
-          category: z.enum(["concert", "sports", "festival", "rally", "exhibition", "other"]),
+          category: z.enum(["concert", "sports", "festival", "rally", "exhibition", "other", "local_festival", "expo", "fair", "forum"]),
           eventDate: z.number(),
           venue: z.string().min(2),
           address: z.string().optional(),
@@ -1233,7 +1233,7 @@ export const appRouter = router({
           z.object({
             id: z.number(),
             title: z.string().min(2).optional(),
-            category: z.enum(["concert", "sports", "festival", "rally", "exhibition", "other"]).optional(),
+            category: z.enum(["concert", "sports", "festival", "rally", "exhibition", "other", "local_festival", "expo", "fair", "forum"]).optional(),
             eventDate: z.number().optional(),
             venue: z.string().min(2).optional(),
             address: z.string().optional(),

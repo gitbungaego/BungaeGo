@@ -37,7 +37,18 @@ const STEPS = [
   { id: 4, label: "확인", icon: <CheckCircle2 className="h-4 w-4" /> },
 ];
 
-const CATEGORIES = ["concert", "sports", "festival", "rally", "exhibition", "other"] as const;
+const CATEGORIES = [
+  "concert",
+  "sports",
+  "festival",
+  "local_festival",
+  "rally",
+  "exhibition",
+  "expo",
+  "fair",
+  "forum",
+  "other",
+] as const;
 
 // 인원·요금은 차량(버스 좌석)에 따라 운영자가 추후 확정 — 생성 시엔 기본값으로 자동
 // 설정하고 입력받지 않는다. 수정은 관리자 편집(TripEditDialog / bungaeting.admin.updateTrip)으로.
