@@ -107,6 +107,7 @@ curl -s -o /dev/null -w "%{http_code}\n" "https://bungaego.com/api/oauth/kakao/l
 | 0023 | medical_mindworm | `event_requests`(이벤트 만들기 신청서) + `shuttle_demands`(희망 탑승지 수요, UNIQUE(eventId,userId)) 테이블 | 적용됨(실측 2026-07-16) |
 | 0024 | outstanding_the_stranger | `event_requests.arrivalTime` varchar(10) 추가 (희망 도착 시각, nullable 순수 추가형) | 적용됨(실측 2026-07-16) |
 | 0025 | lucky_metal_master | `event_requests.startTime`/`endTime` varchar(5) 추가 (행사 일정 시작/종료 시각, nullable 순수 추가형) | 적용됨(실측 2026-07-16) |
+| 0026 | violet_greymalkin | `trips.oneWayPrice` int + `reservations.ticketType` enum(round/outbound/inbound) DEFAULT 'round' (탑승권 왕복/행사장행/귀가행, 순수 추가형) | 적용됨(실측 2026-07-17) |
 
 > **번개팅 배포 상태 (2026-07-15 갱신)**: 번개팅 **①~⑦ 전 단계**의 스키마(0017~0021)·코드가
 > 프로덕션에 배포됐고, **운영자 결정으로 `FEATURE_BUNGAETING`/`VITE_FEATURE_BUNGAETING`를
