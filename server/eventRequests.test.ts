@@ -52,12 +52,20 @@ afterEach(() => {
 describe("eventRequests.create — 이벤트 만들기 신청", () => {
   it("정상 신청은 저장되고 id 반환", async () => {
     vi.mocked(db.createEventRequest).mockResolvedValue(11);
-    const r = await appRouter.createCaller(ctx(7)).eventRequests.create(validRequest);
+    const r = await appRouter.createCaller(ctx(7)).eventRequests.create({ ...validRequest, arrivalTime: "18:30" });
     expect(r).toEqual({ id: 11 });
     const saved = vi.mocked(db.createEventRequest).mock.calls[0][0];
     expect(saved.userId).toBe(7);
     expect(saved.status).toBe("pending");
     expect(saved.arrivalPreference).toBe("md_sale");
+    expect(saved.arrivalTime).toBe("18:30");
+  });
+
+  it("arrivalTime은 선택 — 생략해도 저장된다", async () => {
+    vi.mocked(db.createEventRequest).mockResolvedValue(12);
+    const r = await appRouter.createCaller(ctx(7)).eventRequests.create(validRequest);
+    expect(r).toEqual({ id: 12 });
+    expect(vi.mocked(db.createEventRequest).mock.calls[0][0].arrivalTime).toBeUndefined();
   });
 
   it("비로그인 → UNAUTHORIZED", async () => {

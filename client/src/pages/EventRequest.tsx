@@ -26,6 +26,7 @@ export default function EventRequestPage() {
   const [endDate, setEndDate] = useState("");
   const [destination, setDestination] = useState("");
   const [origin, setOrigin] = useState("");
+  const [arrivalTime, setArrivalTime] = useState("");
   const [arrivalPref, setArrivalPref] = useState("");
   const [arrivalNote, setArrivalNote] = useState("");
   const [inquiry, setInquiry] = useState("");
@@ -123,34 +124,40 @@ export default function EventRequestPage() {
       </section>
 
       {/* 6. 도착 희망 시간/사유 */}
-      <section className="space-y-2">
+      <section className="space-y-3">
         <Label className="font-semibold">6. 도착하길 원하는 시간과 이유를 알려주세요 *</Label>
-        <RadioGroup value={arrivalPref} onValueChange={setArrivalPref} className="space-y-1.5">
-          {ARRIVAL_PREF_OPTIONS.map((o) => (
-            <label
-              key={o.key}
-              className={`flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-sm cursor-pointer transition-colors ${
-                arrivalPref === o.key ? "border-primary bg-primary/5" : "border-border"
-              }`}
-            >
-              <RadioGroupItem value={o.key} />
-              {o.label}
-            </label>
-          ))}
-        </RadioGroup>
-        {/* 어떤 항목을 골라도 세부 내용을 직접 적을 수 있게 (기타와 동일하게) */}
-        {arrivalPref && (
-          <Input
-            value={arrivalNote}
-            onChange={(e) => setArrivalNote(e.target.value)}
-            maxLength={300}
-            placeholder={
-              arrivalPref === "etc"
-                ? "원하는 도착 시간/이유를 적어주세요"
-                : "구체적인 시간이나 추가 설명이 있다면 적어주세요 (선택)"
-            }
-          />
-        )}
+
+        {/* 희망 도착 시각 — 가장 위에서 선택 */}
+        <div className="space-y-1.5">
+          <span className="text-xs text-muted-foreground">희망 도착 시각 (선택)</span>
+          <Input type="time" value={arrivalTime} onChange={(e) => setArrivalTime(e.target.value)} />
+        </div>
+
+        {/* 이유를 알려주세요 */}
+        <div className="space-y-1.5">
+          <span className="text-xs text-muted-foreground">이유를 알려주세요</span>
+          <RadioGroup value={arrivalPref} onValueChange={setArrivalPref} className="space-y-1.5">
+            {ARRIVAL_PREF_OPTIONS.map((o) => (
+              <label
+                key={o.key}
+                className={`flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-sm cursor-pointer transition-colors ${
+                  arrivalPref === o.key ? "border-primary bg-primary/5" : "border-border"
+                }`}
+              >
+                <RadioGroupItem value={o.key} />
+                {o.label}
+              </label>
+            ))}
+          </RadioGroup>
+          {arrivalPref && (
+            <Input
+              value={arrivalNote}
+              onChange={(e) => setArrivalNote(e.target.value)}
+              maxLength={300}
+              placeholder={arrivalPref === "etc" ? "이유를 적어주세요" : "추가로 전하고 싶은 이유가 있다면 적어주세요 (선택)"}
+            />
+          )}
+        </div>
       </section>
 
       {/* 7. 추가 문의 */}
@@ -177,6 +184,7 @@ export default function EventRequestPage() {
             endDate: endDate || undefined,
             destination: destination.trim(),
             origin: origin.trim(),
+            arrivalTime: arrivalTime || undefined,
             arrivalPreference: arrivalPref as "md_sale" | "ktx" | "ticket_booth" | "flexible" | "etc",
             arrivalNote: arrivalNote.trim() || undefined,
             inquiry: inquiry.trim() || undefined,

@@ -154,6 +154,7 @@ export const appRouter = router({
           endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
           destination: z.string().min(2).max(300),
           origin: z.string().min(2).max(300),
+          arrivalTime: z.string().max(10).optional(),
           arrivalPreference: z.enum(ARRIVAL_PREFERENCES),
           arrivalNote: z.string().max(300).optional(),
           inquiry: z.string().max(500).optional(),

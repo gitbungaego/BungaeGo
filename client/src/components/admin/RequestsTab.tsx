@@ -52,7 +52,7 @@ function EventRequestsSection() {
                 {r.endDate ? ` ~ ${r.endDate}` : ""} · {r.origin} → {r.destination}
               </p>
               <p className="text-xs">
-                도착 희망: {ARRIVAL_LABEL[r.arrivalPreference] ?? r.arrivalPreference}
+                희망 도착 시각: {r.arrivalTime ?? "미지정"} · {ARRIVAL_LABEL[r.arrivalPreference] ?? r.arrivalPreference}
                 {r.arrivalNote ? ` — ${r.arrivalNote}` : ""}
               </p>
               {r.inquiry && <p className="text-xs text-muted-foreground">문의: {r.inquiry}</p>}

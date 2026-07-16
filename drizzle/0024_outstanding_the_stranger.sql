@@ -1,0 +1,1 @@
+ALTER TABLE `event_requests` ADD `arrivalTime` varchar(10);

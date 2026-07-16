@@ -497,6 +497,8 @@ export const eventRequests = mysqlTable("event_requests", {
   endDate: date("endDate", { mode: "string" }),
   destination: varchar("destination", { length: 300 }).notNull(),
   origin: varchar("origin", { length: 300 }).notNull(),
+  // 희망 도착 시각(HH:MM, 선택) — 이유(arrivalPreference)와 분리된 별도 입력.
+  arrivalTime: varchar("arrivalTime", { length: 10 }),
   arrivalPreference: mysqlEnum("arrivalPreference", ARRIVAL_PREFERENCES).notNull(),
   arrivalNote: varchar("arrivalNote", { length: 300 }),
   inquiry: varchar("inquiry", { length: 500 }),
