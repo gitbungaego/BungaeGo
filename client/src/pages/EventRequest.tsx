@@ -138,12 +138,17 @@ export default function EventRequestPage() {
             </label>
           ))}
         </RadioGroup>
-        {arrivalPref === "etc" && (
+        {/* 어떤 항목을 골라도 세부 내용을 직접 적을 수 있게 (기타와 동일하게) */}
+        {arrivalPref && (
           <Input
             value={arrivalNote}
             onChange={(e) => setArrivalNote(e.target.value)}
             maxLength={300}
-            placeholder="원하는 도착 시간/이유를 적어주세요"
+            placeholder={
+              arrivalPref === "etc"
+                ? "원하는 도착 시간/이유를 적어주세요"
+                : "구체적인 시간이나 추가 설명이 있다면 적어주세요 (선택)"
+            }
           />
         )}
       </section>
