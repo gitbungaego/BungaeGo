@@ -109,6 +109,7 @@ curl -s -o /dev/null -w "%{http_code}\n" "https://bungaego.com/api/oauth/kakao/l
 | 0025 | lucky_metal_master | `event_requests.startTime`/`endTime` varchar(5) 추가 (행사 일정 시작/종료 시각, nullable 순수 추가형) | 적용됨(실측 2026-07-16) |
 | 0026 | violet_greymalkin | `trips.oneWayPrice` int + `reservations.ticketType` enum(round/outbound/inbound) DEFAULT 'round' (탑승권 왕복/행사장행/귀가행, 순수 추가형) | 적용됨(실측 2026-07-17) |
 | 0027 | white_luckman | `users.realName` varchar(100) 추가 (카카오 실명 수집, nullable 순수 추가형). 전화번호는 기존 `users.phone` 재사용. scope 요청은 `KAKAO_EXTRA_SCOPES` env로 게이트 | 적용됨(실측 2026-07-17) |
+| 0028 | brainy_cassandra_nova | 레퍼럴·크레딧: `point_transactions`(통합 원장)·`referral_entries`(주문 단위 추천 건)·`reward_config`(요율 설정) 테이블 + `users.pointsExpiresAt` (전부 순수 추가형). 잔액 진실 원천은 원장, users.pointsBalance는 캐시 | 적용됨(실측 2026-07-18) |
 
 > **번개팅 배포 상태 (2026-07-15 갱신)**: 번개팅 **①~⑦ 전 단계**의 스키마(0017~0021)·코드가
 > 프로덕션에 배포됐고, **운영자 결정으로 `FEATURE_BUNGAETING`/`VITE_FEATURE_BUNGAETING`를
