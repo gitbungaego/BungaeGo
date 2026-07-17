@@ -9,6 +9,8 @@ vi.mock("./db", async (importOriginal) => {
     getEventById: vi.fn(),
     upsertShuttleDemand: vi.fn(),
     getShuttleDemandStatus: vi.fn(),
+    deleteEventRequestForUser: vi.fn(),
+    deleteShuttleDemandForUser: vi.fn(),
   };
 });
 
@@ -104,6 +106,16 @@ describe("eventRequests.create — 이벤트 만들기 신청", () => {
     expect(db.createEventRequest).not.toHaveBeenCalled();
   });
 
+  it("본인 신청 취소 — 소유자 조건으로 삭제, 없는/남의 건은 NOT_FOUND", async () => {
+    vi.mocked(db.deleteEventRequestForUser).mockResolvedValue(true);
+    await expect(appRouter.createCaller(ctx(7)).eventRequests.delete({ id: 3 })).resolves.toEqual({ success: true });
+    expect(db.deleteEventRequestForUser).toHaveBeenCalledWith(3, 7);
+
+    vi.mocked(db.deleteEventRequestForUser).mockResolvedValue(false);
+    await expect(appRouter.createCaller(ctx(7)).eventRequests.delete({ id: 999 }))
+      .rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
   it("adminList는 관리자만", async () => {
     await expect(appRouter.createCaller(ctx(7)).eventRequests.adminList())
       .rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -130,6 +142,18 @@ describe("shuttleDemands — 희망 탑승지 수요", () => {
     await expect(appRouter.createCaller(ctx(7)).shuttleDemands.upsert({ eventId: 999, area: "capital", stopLabel: "강남역" }))
       .rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(db.upsertShuttleDemand).not.toHaveBeenCalled();
+  });
+
+  it("본인 수요 신청 취소 — (eventId, userId)로 삭제", async () => {
+    vi.mocked(db.deleteShuttleDemandForUser).mockResolvedValue(true);
+    await expect(appRouter.createCaller(ctx(7)).shuttleDemands.remove({ eventId: 5 })).resolves.toEqual({ success: true });
+    expect(db.deleteShuttleDemandForUser).toHaveBeenCalledWith(5, 7);
+
+    vi.mocked(db.deleteShuttleDemandForUser).mockResolvedValue(false);
+    await expect(appRouter.createCaller(ctx(7)).shuttleDemands.remove({ eventId: 999 }))
+      .rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(appRouter.createCaller(ctx(null)).shuttleDemands.remove({ eventId: 5 }))
+      .rejects.toMatchObject({ code: "UNAUTHORIZED" });
   });
 
   it("비로그인 upsert → UNAUTHORIZED, status는 공개(count만)", async () => {

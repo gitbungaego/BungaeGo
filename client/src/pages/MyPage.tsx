@@ -392,6 +392,22 @@ function RideRequestsTab() {
     onError: (err) => toast.error(err.message),
   });
 
+  const deleteEventRequest = trpc.eventRequests.delete.useMutation({
+    onSuccess: () => {
+      toast.success("이벤트 신청이 취소되었습니다.");
+      utils.eventRequests.myList.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const removeDemand = trpc.shuttleDemands.remove.useMutation({
+    onSuccess: () => {
+      toast.success("셔틀 신청이 취소되었습니다.");
+      utils.shuttleDemands.myList.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
   if (isLoading || erLoading || sdLoading || likedLoading) {
     return (
       <div className="space-y-3">
@@ -458,7 +474,18 @@ function RideRequestsTab() {
                     </Badge>
                   )}
                 </div>
-                <p className="text-[11px] text-muted-foreground mt-2">{formatDate(r.createdAt)} 신청</p>
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-[11px] text-muted-foreground">{formatDate(r.createdAt)} 신청</span>
+                  <button
+                    type="button"
+                    onClick={() => deleteEventRequest.mutate({ id: r.id })}
+                    disabled={deleteEventRequest.isPending}
+                    className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    {r.status === "done" ? "내역 삭제" : "신청 취소"}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -471,9 +498,9 @@ function RideRequestsTab() {
           <h3 className="text-sm font-semibold mb-2">셔틀 신청</h3>
           <div className="space-y-2">
             {demands!.map((d) => (
-              <Link key={d.id} href={`/demand/${d.eventId}`}>
-                <div className="rounded-xl border border-border bg-card p-4 hover:border-primary/40 transition-colors cursor-pointer">
-                  <div className="flex items-start justify-between gap-3">
+              <div key={d.id} className="rounded-xl border border-border bg-card p-4">
+                <Link href={`/demand/${d.eventId}`}>
+                  <div className="flex items-start justify-between gap-3 cursor-pointer">
                     <div className="min-w-0">
                       <p className="font-semibold text-sm truncate">{d.eventTitle}</p>
                       <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
@@ -486,9 +513,25 @@ function RideRequestsTab() {
                       수요 접수
                     </Badge>
                   </div>
-                  <p className="text-[11px] text-muted-foreground mt-2">{formatDate(d.createdAt)} 신청 · 눌러서 변경</p>
+                </Link>
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-[11px] text-muted-foreground">{formatDate(d.createdAt)} 신청</span>
+                  <div className="flex items-center gap-3">
+                    <Link href={`/demand/${d.eventId}`} className="text-xs font-medium text-primary">
+                      변경
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => removeDemand.mutate({ eventId: d.eventId })}
+                      disabled={removeDemand.isPending}
+                      className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      신청 취소
+                    </button>
+                  </div>
                 </div>
-              </Link>
+              </div>
             ))}
           </div>
         </section>

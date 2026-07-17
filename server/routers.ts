@@ -48,6 +48,8 @@ import {
   getReferralStatsByReferrer,
   getShuttleDemandStatus,
   getShuttleDemandSummary,
+  deleteEventRequestForUser,
+  deleteShuttleDemandForUser,
   getShuttleDemandsByUserId,
   hideReservation,
   setEventRequestStatus,
@@ -212,6 +214,15 @@ export const appRouter = router({
     // 내 이벤트 신청 내역 (마이페이지 '참가 신청' 탭).
     myList: protectedProcedure.query(({ ctx }) => getEventRequestsByUserId(ctx.user.id)),
 
+    // 본인 신청 취소(삭제) — 소유자 일치 행만 삭제되므로 별도 권한 확인 불필요.
+    delete: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const deleted = await deleteEventRequestForUser(input.id, ctx.user.id);
+        if (!deleted) throw new TRPCError({ code: "NOT_FOUND", message: "신청 내역을 찾을 수 없습니다." });
+        return { success: true } as const;
+      }),
+
     adminList: adminProcedure.query(() => getEventRequests()),
 
     setStatus: adminProcedure
@@ -254,6 +265,15 @@ export const appRouter = router({
 
     // 내 셔틀 신청(희망 탑승지) 내역 (마이페이지 '참가 신청' 탭).
     myList: protectedProcedure.query(({ ctx }) => getShuttleDemandsByUserId(ctx.user.id)),
+
+    // 본인 수요 신청 취소 — 유저당 이벤트당 1건.
+    remove: protectedProcedure
+      .input(z.object({ eventId: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const deleted = await deleteShuttleDemandForUser(input.eventId, ctx.user.id);
+        if (!deleted) throw new TRPCError({ code: "NOT_FOUND", message: "신청 내역을 찾을 수 없습니다." });
+        return { success: true } as const;
+      }),
 
     adminSummary: adminProcedure.query(() => getShuttleDemandSummary()),
   }),

@@ -2625,6 +2625,16 @@ export async function getEventRequestsByUserId(userId: number): Promise<EventReq
   return db.select().from(eventRequests).where(eq(eventRequests.userId, userId)).orderBy(desc(eventRequests.createdAt));
 }
 
+// 본인 신청 취소(삭제) — 소유자 일치 행만 지운다. 반환값 = 실제 삭제 여부.
+export async function deleteEventRequestForUser(id: number, userId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const result = await db
+    .delete(eventRequests)
+    .where(and(eq(eventRequests.id, id), eq(eventRequests.userId, userId)));
+  return ((result[0] as any)?.affectedRows ?? 0) > 0;
+}
+
 export async function setEventRequestStatus(id: number, status: EventRequest["status"]): Promise<void> {
   const db = await getDb();
   if (!db) return;
@@ -2668,6 +2678,16 @@ export async function getShuttleDemandStatus(
     mine = rows[0] ?? null;
   }
   return { count: Number(row?.count ?? 0), mine };
+}
+
+// 본인 수요 신청 취소 — 유저당 이벤트당 1건이므로 (eventId, userId)로 지운다.
+export async function deleteShuttleDemandForUser(eventId: number, userId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const result = await db
+    .delete(shuttleDemands)
+    .where(and(eq(shuttleDemands.eventId, eventId), eq(shuttleDemands.userId, userId)));
+  return ((result[0] as any)?.affectedRows ?? 0) > 0;
 }
 
 // 내 셔틀 만들기(희망 탑승지) 신청 내역 — 이벤트 제목 포함 (마이페이지 '참가 신청' 탭).
