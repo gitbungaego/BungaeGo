@@ -190,6 +190,13 @@
       "when": 1784215574526,
       "tag": "0026_violet_greymalkin",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "5",
+      "when": 1784294464812,
+      "tag": "0027_white_luckman",
+      "breakpoints": true
     }
   ]
 }

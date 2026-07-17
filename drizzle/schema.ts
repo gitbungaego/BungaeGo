@@ -20,7 +20,10 @@ export type UserStatus = (typeof USER_STATUSES)[number];
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
   openId: varchar("openId", { length: 64 }).notNull().unique(),
+  // name = 표시용 닉네임 (마이페이지에서 자유 수정, 카카오 재로그인이 덮어쓰지 않음).
   name: text("name"),
+  // realName = 카카오 로그인 시 수집한 실명 (name/phone_number 동의항목 승인 시).
+  realName: varchar("realName", { length: 100 }),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
   role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),

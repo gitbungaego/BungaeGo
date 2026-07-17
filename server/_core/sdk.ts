@@ -318,6 +318,7 @@ class SDKServer {
           id: -1,
           openId: session.openId,
           name: session.name || null,
+          realName: null,
           email: null,
           loginMethod: null,
           role: "user",

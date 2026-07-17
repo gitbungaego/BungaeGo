@@ -39,10 +39,12 @@ import {
   getPaidPaymentItemTotalsByType,
   createEventRequest,
   getEventRequests,
+  getEventRequestsByUserId,
   getInterestedCandidateIds,
   getPaymentByOrderId,
   getShuttleDemandStatus,
   getShuttleDemandSummary,
+  getShuttleDemandsByUserId,
   setEventRequestStatus,
   upsertShuttleDemand,
   getPaymentItemsByPaymentId,
@@ -72,6 +74,7 @@ import {
   updateRideRequestStatus,
   updateTrip,
   updateTripStatus,
+  updateUserName,
   updateUserStatus,
 } from "./db";
 import {
@@ -184,6 +187,9 @@ export const appRouter = router({
         return { id };
       }),
 
+    // 내 이벤트 신청 내역 (마이페이지 '참가 신청' 탭).
+    myList: protectedProcedure.query(({ ctx }) => getEventRequestsByUserId(ctx.user.id)),
+
     adminList: adminProcedure.query(() => getEventRequests()),
 
     setStatus: adminProcedure
@@ -224,12 +230,23 @@ export const appRouter = router({
         return getShuttleDemandStatus(input.eventId, ctx.user.id);
       }),
 
+    // 내 셔틀 신청(희망 탑승지) 내역 (마이페이지 '참가 신청' 탭).
+    myList: protectedProcedure.query(({ ctx }) => getShuttleDemandsByUserId(ctx.user.id)),
+
     adminSummary: adminProcedure.query(() => getShuttleDemandSummary()),
   }),
 
   // ─── Auth ──────────────────────────────────────────────────────────────────
   auth: router({
     me: publicProcedure.query((opts) => opts.ctx.user),
+
+    // 닉네임(표시 이름) 변경 — 마이페이지에서 자유 수정.
+    updateNickname: protectedProcedure
+      .input(z.object({ name: z.string().trim().min(1, "닉네임을 입력해주세요.").max(30, "닉네임은 30자 이내로 입력해주세요.") }))
+      .mutation(async ({ input, ctx }) => {
+        await updateUserName(ctx.user.id, input.name);
+        return { success: true, name: input.name } as const;
+      }),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });

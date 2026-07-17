@@ -48,11 +48,24 @@ interface KakaoUserInfo {
   id: number;
   kakao_account?: {
     email?: string;
+    // name/phone_number는 카카오 콘솔에서 해당 동의항목 승인 + KAKAO_EXTRA_SCOPES
+    // 설정 시에만 내려온다 (사용자가 동의를 거절하면 없을 수 있음).
+    name?: string;
+    phone_number?: string;
     profile?: {
       nickname?: string;
       profile_image_url?: string;
     };
   };
+}
+
+// 카카오 전화번호 형식("+82 10-1234-5678")을 국내 표기("010-1234-5678")로 정규화.
+export function normalizeKakaoPhone(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  const kr = trimmed.match(/^\+82[\s-]*(\d{1,2})[\s-]*(\d{3,4})[\s-]*(\d{4})$/);
+  if (kr) return `0${kr[1]}-${kr[2]}-${kr[3]}`;
+  return trimmed.slice(0, 20) || undefined;
 }
 
 function getSafeRedirectTarget(req: Request, redirectUri: string | undefined) {
@@ -179,6 +192,10 @@ export function registerOAuthRoutes(app: Express) {
     authorizeUrl.searchParams.set("redirect_uri", redirectUri);
     authorizeUrl.searchParams.set("response_type", "code");
     authorizeUrl.searchParams.set("state", state);
+    // 이름/전화번호 등 추가 동의항목 — 콘솔 승인 후 KAKAO_EXTRA_SCOPES로 활성화.
+    if (ENV.kakaoExtraScopes) {
+      authorizeUrl.searchParams.set("scope", ENV.kakaoExtraScopes);
+    }
 
     res.redirect(302, authorizeUrl.toString());
   });
@@ -240,13 +257,22 @@ export function registerOAuthRoutes(app: Express) {
       const openId = `kakao:${kakaoUser.id}`;
       const name = kakaoUser.kakao_account?.profile?.nickname || "카카오사용자";
       const email = kakaoUser.kakao_account?.email ?? null;
+      // 추가 동의항목(콘솔 승인 + scope 요청 시)으로 받은 실명/전화번호.
+      const realName = kakaoUser.kakao_account?.name?.trim() || undefined;
+      const phone = normalizeKakaoPhone(kakaoUser.kakao_account?.phone_number);
 
       let user: User | undefined;
       try {
+        // 닉네임(name)은 마이페이지에서 수정 가능하므로 신규 가입 때만 카카오
+        // 닉네임을 심는다 — 재로그인이 수정한 닉네임을 덮어쓰지 않게. 실명/전화는
+        // 카카오가 원본이므로 값이 내려온 로그인마다 최신으로 갱신한다.
+        const existing = await db.getUserByOpenId(openId);
         user = await db.upsertUser({
           openId,
-          name,
+          name: existing?.name ? undefined : name,
           email,
+          realName,
+          phone,
           loginMethod: "kakao",
           lastSignedIn: new Date(),
         });

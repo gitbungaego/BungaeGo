@@ -9,6 +9,10 @@ export const ENV = {
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
   kakaoRestApiKey: process.env.KAKAO_REST_API_KEY ?? "",
   kakaoClientSecret: process.env.KAKAO_CLIENT_SECRET ?? "",
+  // 카카오 로그인 추가 동의항목 scope (쉼표 구분, 예: "name,phone_number").
+  // 카카오 개발자 콘솔에서 해당 동의항목이 승인(비즈니스 앱)된 뒤에만 설정할 것 —
+  // 미승인 상태로 scope를 보내면 카카오가 로그인 자체를 거부한다(KOE205).
+  kakaoExtraScopes: process.env.KAKAO_EXTRA_SCOPES ?? "",
   // 의도적으로 REQUIRED_ENV_VARS에 넣지 않는다: 없으면 toss 결제수단만
   // 비활성화되고(mock은 그대로 동작), 있으면 활성화된다. 라이브 전환은
   // 테스트 키 → 라이브 키 교체만으로 끝난다.

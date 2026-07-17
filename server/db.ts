@@ -189,7 +189,7 @@ export async function upsertUser(user: InsertUser): Promise<User | undefined> {
   const values: InsertUser = { openId: user.openId };
   const updateSet: Record<string, unknown> = {};
 
-  const textFields = ["name", "email", "loginMethod"] as const;
+  const textFields = ["name", "email", "loginMethod", "realName", "phone"] as const;
   for (const field of textFields) {
     const value = user[field];
     if (value === undefined) continue;
@@ -230,6 +230,14 @@ export async function updateUserStatus(userId: number, status: UserStatus): Prom
   const db = await getDb();
   if (!db) return;
   await db.update(users).set({ status }).where(eq(users.id, userId));
+}
+
+// 닉네임(표시 이름) 변경 — 마이페이지에서 자유 수정. 카카오 재로그인은 신규
+// 가입이 아닌 한 name을 덮어쓰지 않으므로 여기서 바꾼 값이 유지된다.
+export async function updateUserName(userId: number, name: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.update(users).set({ name }).where(eq(users.id, userId));
 }
 
 export async function getUserByOpenId(openId: string): Promise<User | undefined> {
@@ -2204,6 +2212,13 @@ export async function getEventRequests(): Promise<EventRequest[]> {
   return db.select().from(eventRequests).orderBy(eventRequests.status, desc(eventRequests.createdAt));
 }
 
+// 내 이벤트 만들기 신청 내역 (마이페이지 '참가 신청' 탭).
+export async function getEventRequestsByUserId(userId: number): Promise<EventRequest[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(eventRequests).where(eq(eventRequests.userId, userId)).orderBy(desc(eventRequests.createdAt));
+}
+
 export async function setEventRequestStatus(id: number, status: EventRequest["status"]): Promise<void> {
   const db = await getDb();
   if (!db) return;
@@ -2247,6 +2262,35 @@ export async function getShuttleDemandStatus(
     mine = rows[0] ?? null;
   }
   return { count: Number(row?.count ?? 0), mine };
+}
+
+// 내 셔틀 만들기(희망 탑승지) 신청 내역 — 이벤트 제목 포함 (마이페이지 '참가 신청' 탭).
+export interface MyShuttleDemandRow {
+  id: number;
+  eventId: number;
+  eventTitle: string;
+  area: "capital" | "other";
+  stopLabel: string;
+  neighborhood: string | null;
+  createdAt: Date;
+}
+export async function getShuttleDemandsByUserId(userId: number): Promise<MyShuttleDemandRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: shuttleDemands.id,
+      eventId: shuttleDemands.eventId,
+      eventTitle: events.title,
+      area: shuttleDemands.area,
+      stopLabel: shuttleDemands.stopLabel,
+      neighborhood: shuttleDemands.neighborhood,
+      createdAt: shuttleDemands.createdAt,
+    })
+    .from(shuttleDemands)
+    .innerJoin(events, eq(shuttleDemands.eventId, events.id))
+    .where(eq(shuttleDemands.userId, userId))
+    .orderBy(desc(shuttleDemands.createdAt));
 }
 
 // 관리자 집계: 이벤트별 수요 수 + 상위 탑승지.

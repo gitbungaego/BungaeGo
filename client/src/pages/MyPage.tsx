@@ -5,6 +5,7 @@ import { evaluateCancellation } from "@shared/cancellationPolicy";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -23,6 +24,7 @@ import {
   Heart,
   MapPin,
   MessageCircle,
+  Pencil,
   Route as RouteIcon,
   Share2,
   Star,
@@ -59,17 +61,7 @@ export default function MyPage() {
     <div className="py-8">
       <div className="container max-w-3xl">
         {/* Profile Card */}
-        <div className="rounded-2xl border border-border bg-card p-6 mb-6">
-          <div className="flex items-center gap-4">
-            <div className="h-14 w-14 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xl font-bold flex-shrink-0">
-              {user?.name?.[0]?.toUpperCase() ?? "U"}
-            </div>
-            <div>
-              <h1 className="text-xl font-bold">{user?.name ?? "사용자"}</h1>
-              <p className="text-sm text-muted-foreground">{user?.email}</p>
-            </div>
-          </div>
-        </div>
+        <ProfileCard />
 
         <Tabs defaultValue="reservations">
           <TabsList className="w-full mb-6">
@@ -129,6 +121,91 @@ export default function MyPage() {
           <p className="text-center text-[11px] text-muted-foreground">
             번개GO — 함께 타면 더 저렴하고, 더 빠르게 · © 2026 번개GO
           </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 프로필 카드 — 닉네임은 연필 아이콘으로 자유 수정. 실명/전화(카카오 수집)는 표시만.
+function ProfileCard() {
+  const { user } = useAuth();
+  const utils = trpc.useUtils();
+  const [editing, setEditing] = useState(false);
+  const [nickname, setNickname] = useState("");
+
+  const updateNickname = trpc.auth.updateNickname.useMutation({
+    onSuccess: () => {
+      toast.success("닉네임이 변경되었습니다.");
+      setEditing(false);
+      utils.auth.me.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const startEdit = () => {
+    setNickname(user?.name ?? "");
+    setEditing(true);
+  };
+
+  const save = () => {
+    const trimmed = nickname.trim();
+    if (!trimmed) {
+      toast.error("닉네임을 입력해주세요.");
+      return;
+    }
+    updateNickname.mutate({ name: trimmed });
+  };
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-6 mb-6">
+      <div className="flex items-center gap-4">
+        <div className="h-14 w-14 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xl font-bold flex-shrink-0">
+          {user?.name?.[0]?.toUpperCase() ?? "U"}
+        </div>
+        <div className="min-w-0 flex-1">
+          {editing ? (
+            <div className="flex items-center gap-2">
+              <Input
+                value={nickname}
+                onChange={(e) => setNickname(e.target.value)}
+                maxLength={30}
+                className="h-9"
+                placeholder="닉네임"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") save();
+                  if (e.key === "Escape") setEditing(false);
+                }}
+              />
+              <Button size="sm" onClick={save} disabled={updateNickname.isPending}>
+                저장
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+                취소
+              </Button>
+            </div>
+          ) : (
+            <h1 className="text-xl font-bold flex items-center gap-1.5">
+              <span className="truncate">{user?.name ?? "사용자"}</span>
+              <button
+                type="button"
+                onClick={startEdit}
+                className="p-1 text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
+                aria-label="닉네임 수정"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+            </h1>
+          )}
+          <p className="text-sm text-muted-foreground truncate">{user?.email}</p>
+          {(user?.realName || user?.phone) && (
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {user?.realName}
+              {user?.realName && user?.phone ? " · " : ""}
+              {user?.phone}
+            </p>
+          )}
         </div>
       </div>
     </div>
@@ -286,8 +363,12 @@ const REQUEST_STATUS_COLORS: Record<string, string> = {
   failed_refunded: "bg-red-50 text-red-500 border-red-200",
 };
 
+// 참가 신청 탭 — 이벤트 신청(미등록 행사 요청) + 셔틀 신청(희망 탑승지 수요) +
+// 자동매칭 참가 신청을 한 곳에서 보여준다.
 function RideRequestsTab() {
   const { data: requests, isLoading } = trpc.rideRequests.myList.useQuery();
+  const { data: eventRequests, isLoading: erLoading } = trpc.eventRequests.myList.useQuery();
+  const { data: demands, isLoading: sdLoading } = trpc.shuttleDemands.myList.useQuery();
   const utils = trpc.useUtils();
 
   const cancelRequest = trpc.rideRequests.cancel.useMutation({
@@ -298,7 +379,7 @@ function RideRequestsTab() {
     onError: (err) => toast.error(err.message),
   });
 
-  if (isLoading) {
+  if (isLoading || erLoading || sdLoading) {
     return (
       <div className="space-y-3">
         {[1, 2].map((i) => <Skeleton key={i} className="h-28 rounded-xl" />)}
@@ -306,28 +387,105 @@ function RideRequestsTab() {
     );
   }
 
-  if (!requests || requests.length === 0) {
+  const hasAny =
+    (requests?.length ?? 0) > 0 || (eventRequests?.length ?? 0) > 0 || (demands?.length ?? 0) > 0;
+
+  if (!hasAny) {
     return (
       <div className="text-center py-16 text-muted-foreground">
         <RouteIcon className="h-10 w-10 mx-auto mb-3 opacity-20" />
-        <p className="font-medium">참가 신청 내역이 없습니다</p>
-        <Button variant="outline" size="sm" className="mt-4" asChild>
-          <Link href="/events">이벤트 보러 가기</Link>
-        </Button>
+        <p className="font-medium">신청 내역이 없습니다</p>
+        <div className="flex gap-2 justify-center mt-4">
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/event-request">이벤트 만들기</Link>
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/demand">셔틀 만들기</Link>
+          </Button>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-3">
-      {requests.map((req) => (
-        <RideRequestCard
-          key={req.id}
-          request={req}
-          onCancel={(id) => cancelRequest.mutate({ id })}
-          cancelling={cancelRequest.isPending}
-        />
-      ))}
+    <div className="space-y-6">
+      {/* 이벤트 신청 (미등록 행사 요청서) */}
+      {(eventRequests?.length ?? 0) > 0 && (
+        <section>
+          <h3 className="text-sm font-semibold mb-2">이벤트 신청</h3>
+          <div className="space-y-2">
+            {eventRequests!.map((r) => (
+              <div key={r.id} className="rounded-xl border border-border bg-card p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-sm truncate">{r.title}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {r.startDate}
+                      {r.endDate ? ` ~ ${r.endDate}` : ""} · {r.origin} → {r.destination}
+                    </p>
+                  </div>
+                  {r.status === "done" ? (
+                    <Badge variant="outline" className="text-xs border bg-emerald-50 text-emerald-600 border-emerald-200 flex-shrink-0">
+                      처리완료
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-xs border bg-amber-50 text-amber-600 border-amber-200 flex-shrink-0">
+                      검토 중
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-2">{formatDate(r.createdAt)} 신청</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* 셔틀 신청 (희망 탑승지 수요) */}
+      {(demands?.length ?? 0) > 0 && (
+        <section>
+          <h3 className="text-sm font-semibold mb-2">셔틀 신청</h3>
+          <div className="space-y-2">
+            {demands!.map((d) => (
+              <Link key={d.id} href={`/demand/${d.eventId}`}>
+                <div className="rounded-xl border border-border bg-card p-4 hover:border-primary/40 transition-colors cursor-pointer">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-sm truncate">{d.eventTitle}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
+                        <MapPin className="h-3 w-3 flex-shrink-0" />
+                        {d.stopLabel}
+                        {d.neighborhood ? ` (${d.neighborhood})` : ""} 출발 희망
+                      </p>
+                    </div>
+                    <Badge variant="outline" className="text-xs border bg-blue-50 text-blue-600 border-blue-200 flex-shrink-0">
+                      수요 접수
+                    </Badge>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-2">{formatDate(d.createdAt)} 신청 · 눌러서 변경</p>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* 자동매칭 참가 신청 */}
+      {(requests?.length ?? 0) > 0 && (
+        <section>
+          <h3 className="text-sm font-semibold mb-2">참가 신청 (자동매칭)</h3>
+          <div className="space-y-3">
+            {requests!.map((req) => (
+              <RideRequestCard
+                key={req.id}
+                request={req}
+                onCancel={(id) => cancelRequest.mutate({ id })}
+                cancelling={cancelRequest.isPending}
+              />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
