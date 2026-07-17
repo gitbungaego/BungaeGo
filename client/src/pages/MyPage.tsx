@@ -406,18 +406,25 @@ function RideRequestsTab() {
     (demands?.length ?? 0) > 0 ||
     (likedEvents?.length ?? 0) > 0;
 
+  // 이벤트/셔틀 만들기 바로가기 — 내역 유무와 무관하게 탭 상단에 항상 표시.
+  const quickActions = (
+    <div className="grid grid-cols-2 gap-2">
+      <Button variant="outline" size="sm" asChild>
+        <Link href="/event-request">이벤트 만들기</Link>
+      </Button>
+      <Button variant="outline" size="sm" asChild>
+        <Link href="/demand">셔틀 만들기</Link>
+      </Button>
+    </div>
+  );
+
   if (!hasAny) {
     return (
-      <div className="text-center py-16 text-muted-foreground">
-        <RouteIcon className="h-10 w-10 mx-auto mb-3 opacity-20" />
-        <p className="font-medium">신청·찜 내역이 없습니다</p>
-        <div className="flex gap-2 justify-center mt-4">
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/event-request">이벤트 만들기</Link>
-          </Button>
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/demand">셔틀 만들기</Link>
-          </Button>
+      <div className="space-y-4">
+        {quickActions}
+        <div className="text-center py-14 text-muted-foreground">
+          <RouteIcon className="h-10 w-10 mx-auto mb-3 opacity-20" />
+          <p className="font-medium">신청·찜 내역이 없습니다</p>
         </div>
       </div>
     );
@@ -425,6 +432,7 @@ function RideRequestsTab() {
 
   return (
     <div className="space-y-6">
+      {quickActions}
       {/* 이벤트 신청 (미등록 행사 요청서) */}
       {(eventRequests?.length ?? 0) > 0 && (
         <section>
