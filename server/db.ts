@@ -1082,13 +1082,22 @@ function flattenReservation(reservation: Reservation, payment: Payment | undefin
 export async function getReservationsByUserId(userId: number): Promise<ReservationWithPayment[]> {
   const db = await getDb();
   if (!db) return [];
+  // 사용자가 지운(hiddenAt) 취소 내역은 마이페이지 목록에서 제외 — 관리자
+  // adminList는 이 함수를 쓰지 않으므로 감사 목록엔 그대로 남는다.
   const rows = await db
     .select()
     .from(reservations)
-    .where(eq(reservations.userId, userId))
+    .where(and(eq(reservations.userId, userId), isNull(reservations.hiddenAt)))
     .orderBy(desc(reservations.createdAt));
   const paymentsByReservation = await getLatestPaymentsByReservationIds(rows.map((r) => r.id));
   return rows.map((r) => flattenReservation(r, paymentsByReservation.get(r.id)));
+}
+
+// 취소된 예약 내역 소프트 숨김 (사용자 '내역 삭제').
+export async function hideReservation(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(reservations).set({ hiddenAt: new Date() }).where(eq(reservations.id, id));
 }
 
 export async function getReservationById(id: number): Promise<ReservationWithPayment | undefined> {

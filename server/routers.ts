@@ -49,6 +49,7 @@ import {
   getShuttleDemandStatus,
   getShuttleDemandSummary,
   getShuttleDemandsByUserId,
+  hideReservation,
   setEventRequestStatus,
   upsertShuttleDemand,
   getPaymentItemsByPaymentId,
@@ -734,6 +735,21 @@ export const appRouter = router({
         await voidReservationReferral(res.id);
 
         return { success: true };
+      }),
+
+    // 취소/환불된 내역을 마이페이지에서 숨긴다 (소프트 삭제 — DB엔 남음).
+    // 활성(paid/pending) 예약은 숨길 수 없다.
+    hide: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const res = await getReservationById(input.id);
+        if (!res) throw new TRPCError({ code: "NOT_FOUND" });
+        if (res.userId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
+        if (res.status !== "cancelled" && res.status !== "refunded") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "취소된 내역만 삭제할 수 있습니다." });
+        }
+        await hideReservation(input.id);
+        return { success: true } as const;
       }),
 
     // Admin-only escape hatch: bypasses the D-5 cancellation window entirely

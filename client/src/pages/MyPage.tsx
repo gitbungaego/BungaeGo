@@ -27,6 +27,7 @@ import {
   Share2,
   Star,
   Ticket,
+  Trash2,
   User,
   XCircle,
 } from "lucide-react";
@@ -67,10 +68,6 @@ export default function MyPage() {
               <Ticket className="h-3.5 w-3.5" />
               예약 내역
             </TabsTrigger>
-            <TabsTrigger value="likes" className="flex-1 gap-1.5">
-              <Heart className="h-3.5 w-3.5" />
-              찜
-            </TabsTrigger>
             <TabsTrigger value="requests" className="flex-1 gap-1.5">
               <RouteIcon className="h-3.5 w-3.5" />
               참가 신청
@@ -83,9 +80,6 @@ export default function MyPage() {
 
           <TabsContent value="reservations">
             <ReservationsTab />
-          </TabsContent>
-          <TabsContent value="likes">
-            <LikedEventsTab />
           </TabsContent>
           <TabsContent value="requests">
             <RideRequestsTab />
@@ -155,30 +149,9 @@ function ProfileCard() {
           {user?.name?.[0]?.toUpperCase() ?? "U"}
         </div>
         <div className="min-w-0 flex-1">
-          {editing ? (
-            <div className="flex items-center gap-2">
-              <Input
-                value={nickname}
-                onChange={(e) => setNickname(e.target.value)}
-                maxLength={30}
-                className="h-9"
-                placeholder="닉네임"
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") save();
-                  if (e.key === "Escape") setEditing(false);
-                }}
-              />
-              <Button size="sm" onClick={save} disabled={updateNickname.isPending}>
-                저장
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
-                취소
-              </Button>
-            </div>
-          ) : (
-            <h1 className="text-xl font-bold flex items-center gap-1.5">
-              <span className="truncate">{user?.name ?? "사용자"}</span>
+          <h1 className="text-xl font-bold flex items-center gap-1.5">
+            <span className="truncate">{user?.name ?? "사용자"}</span>
+            {!editing && (
               <button
                 type="button"
                 onClick={startEdit}
@@ -187,8 +160,8 @@ function ProfileCard() {
               >
                 <Pencil className="h-3.5 w-3.5" />
               </button>
-            </h1>
-          )}
+            )}
+          </h1>
           <p className="text-sm text-muted-foreground truncate">{user?.email}</p>
           {(user?.realName || user?.phone) && (
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -199,6 +172,32 @@ function ProfileCard() {
           )}
         </div>
       </div>
+
+      {/* 편집 모드: 카드 전체 폭을 쓰는 입력 블록 (좁은 인라인 입력 대체) */}
+      {editing && (
+        <div className="mt-4 space-y-2">
+          <Input
+            value={nickname}
+            onChange={(e) => setNickname(e.target.value)}
+            maxLength={30}
+            className="h-11 text-base"
+            placeholder="새 닉네임 입력 (30자 이내)"
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === "Enter") save();
+              if (e.key === "Escape") setEditing(false);
+            }}
+          />
+          <div className="flex gap-2">
+            <Button className="flex-1" onClick={save} disabled={updateNickname.isPending}>
+              {updateNickname.isPending ? "저장 중…" : "저장"}
+            </Button>
+            <Button variant="outline" className="flex-1" onClick={() => setEditing(false)}>
+              취소
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -210,6 +209,14 @@ function ReservationsTab() {
   const cancelReservation = trpc.reservations.cancel.useMutation({
     onSuccess: () => {
       toast.success("예약이 취소되었습니다.");
+      utils.reservations.myList.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const hideReservation = trpc.reservations.hide.useMutation({
+    onSuccess: () => {
+      toast.success("내역이 삭제되었습니다.");
       utils.reservations.myList.invalidate();
     },
     onError: (err) => toast.error(err.message),
@@ -243,13 +250,15 @@ function ReservationsTab() {
           reservation={res}
           onCancel={(id) => cancelReservation.mutate({ id })}
           cancelling={cancelReservation.isPending}
+          onHide={(id) => hideReservation.mutate({ id })}
+          hiding={hideReservation.isPending}
         />
       ))}
     </div>
   );
 }
 
-function ReservationCard({ reservation, onCancel, cancelling }: { reservation: any; onCancel: (id: number) => void; cancelling: boolean }) {
+function ReservationCard({ reservation, onCancel, cancelling, onHide, hiding }: { reservation: any; onCancel: (id: number) => void; cancelling: boolean; onHide: (id: number) => void; hiding: boolean }) {
   const { data: trip } = trpc.trips.byId.useQuery({ id: reservation.tripId });
   const { data: event } = trpc.events.byId.useQuery(
     { id: trip?.eventId ?? 0 },
@@ -323,7 +332,7 @@ function ReservationCard({ reservation, onCancel, cancelling }: { reservation: a
         </div>
       )}
 
-      <div className="mt-3 pt-3 border-t border-border/60">
+      <div className="mt-3 pt-3 border-t border-border/60 flex items-center justify-between gap-2">
         <a
           href={KAKAO_CHANNEL_CHAT_URL}
           target="_blank"
@@ -333,6 +342,18 @@ function ReservationCard({ reservation, onCancel, cancelling }: { reservation: a
           <MessageCircle className="h-3.5 w-3.5" />
           예약 관련 문의
         </a>
+        {/* 취소/환불된 내역만 사용자가 목록에서 지울 수 있다 (소프트 숨김) */}
+        {(reservation.status === "cancelled" || reservation.status === "refunded") && (
+          <button
+            type="button"
+            onClick={() => onHide(reservation.id)}
+            disabled={hiding}
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            내역 삭제
+          </button>
+        )}
       </div>
     </div>
   );
@@ -355,11 +376,12 @@ const REQUEST_STATUS_COLORS: Record<string, string> = {
 };
 
 // 참가 신청 탭 — 이벤트 신청(미등록 행사 요청) + 셔틀 신청(희망 탑승지 수요) +
-// 자동매칭 참가 신청을 한 곳에서 보여준다.
+// 자동매칭 참가 신청 + 찜한 이벤트를 한 곳에서 보여준다 (찜 탭 병합).
 function RideRequestsTab() {
   const { data: requests, isLoading } = trpc.rideRequests.myList.useQuery();
   const { data: eventRequests, isLoading: erLoading } = trpc.eventRequests.myList.useQuery();
   const { data: demands, isLoading: sdLoading } = trpc.shuttleDemands.myList.useQuery();
+  const { data: likedEvents, isLoading: likedLoading } = trpc.events.myLikedList.useQuery();
   const utils = trpc.useUtils();
 
   const cancelRequest = trpc.rideRequests.cancel.useMutation({
@@ -370,7 +392,7 @@ function RideRequestsTab() {
     onError: (err) => toast.error(err.message),
   });
 
-  if (isLoading || erLoading || sdLoading) {
+  if (isLoading || erLoading || sdLoading || likedLoading) {
     return (
       <div className="space-y-3">
         {[1, 2].map((i) => <Skeleton key={i} className="h-28 rounded-xl" />)}
@@ -379,13 +401,16 @@ function RideRequestsTab() {
   }
 
   const hasAny =
-    (requests?.length ?? 0) > 0 || (eventRequests?.length ?? 0) > 0 || (demands?.length ?? 0) > 0;
+    (requests?.length ?? 0) > 0 ||
+    (eventRequests?.length ?? 0) > 0 ||
+    (demands?.length ?? 0) > 0 ||
+    (likedEvents?.length ?? 0) > 0;
 
   if (!hasAny) {
     return (
       <div className="text-center py-16 text-muted-foreground">
         <RouteIcon className="h-10 w-10 mx-auto mb-3 opacity-20" />
-        <p className="font-medium">신청 내역이 없습니다</p>
+        <p className="font-medium">신청·찜 내역이 없습니다</p>
         <div className="flex gap-2 justify-center mt-4">
           <Button variant="outline" size="sm" asChild>
             <Link href="/event-request">이벤트 만들기</Link>
@@ -477,6 +502,43 @@ function RideRequestsTab() {
           </div>
         </section>
       )}
+
+      {/* 찜한 이벤트 (찜 탭 병합) */}
+      {(likedEvents?.length ?? 0) > 0 && (
+        <section>
+          <h3 className="text-sm font-semibold mb-2 flex items-center gap-1">
+            <Heart className="h-3.5 w-3.5 text-red-400" /> 찜한 이벤트
+          </h3>
+          <div className="space-y-2">
+            {likedEvents!.map((event) => (
+              <Link key={event.id} href={`/events/${event.id}`}>
+                <div className="flex items-center gap-3 rounded-xl border border-border bg-card p-3 hover:border-primary/40 transition-colors cursor-pointer">
+                  <div className="h-14 w-14 rounded-lg overflow-hidden bg-muted flex-shrink-0">
+                    {event.imageUrl ? (
+                      <img src={event.imageUrl} alt={event.title} className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="h-full w-full flex items-center justify-center bg-gradient-to-br from-primary via-amber-400 to-orange-400">
+                        <Bus className="h-6 w-6 text-white/70" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold truncate">{event.title}</p>
+                    <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                      <Calendar className="h-3 w-3" />
+                      {formatDate(event.eventDate)}
+                    </p>
+                    <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <MapPin className="h-3 w-3" />
+                      <span className="truncate">{event.venue}</span>
+                    </p>
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -522,61 +584,6 @@ function RideRequestCard({ request, onCancel, cancelling }: { request: any; onCa
           </Button>
         </div>
       )}
-    </div>
-  );
-}
-
-function LikedEventsTab() {
-  const { data: events, isLoading } = trpc.events.myLikedList.useQuery();
-
-  if (isLoading) {
-    return (
-      <div className="space-y-3">
-        {[1, 2, 3].map((i) => <Skeleton key={i} className="h-20 rounded-xl" />)}
-      </div>
-    );
-  }
-
-  if (!events || events.length === 0) {
-    return (
-      <div className="text-center py-16 text-muted-foreground">
-        <Heart className="h-10 w-10 mx-auto mb-3 opacity-20" />
-        <p className="font-medium">찜한 이벤트가 없습니다</p>
-        <Button variant="outline" size="sm" className="mt-4" asChild>
-          <Link href="/events">이벤트 보러 가기</Link>
-        </Button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-3">
-      {events.map((event) => (
-        <Link key={event.id} href={`/events/${event.id}`}>
-          <div className="flex items-center gap-3 rounded-xl border border-border bg-card p-3 hover:border-primary/40 transition-colors cursor-pointer">
-            <div className="h-14 w-14 rounded-lg overflow-hidden bg-muted flex-shrink-0">
-              {event.imageUrl ? (
-                <img src={event.imageUrl} alt={event.title} className="h-full w-full object-cover" />
-              ) : (
-                <div className="h-full w-full flex items-center justify-center bg-gradient-to-br from-primary via-amber-400 to-orange-400">
-                  <Bus className="h-6 w-6 text-white/70" />
-                </div>
-              )}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold truncate">{event.title}</p>
-              <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
-                <Calendar className="h-3 w-3" />
-                {formatDate(event.eventDate)}
-              </p>
-              <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                <MapPin className="h-3 w-3" />
-                <span className="truncate">{event.venue}</span>
-              </p>
-            </div>
-          </div>
-        </Link>
-      ))}
     </div>
   );
 }
@@ -649,19 +656,19 @@ function PointsTab() {
         </Button>
       </div>
 
-      {/* 적립 실적 */}
-      <div className="grid grid-cols-3 gap-3">
-        <div className="rounded-xl border border-border bg-card p-4 text-center">
-          <p className="text-2xl font-bold text-amber-500">{stats?.pending ?? 0}</p>
-          <p className="text-xs text-muted-foreground mt-1">적립 예정</p>
+      {/* 적립 실적 — 라벨이 한 줄로 유지되도록 패딩·간격 축소 + nowrap */}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="rounded-xl border border-border bg-card px-2 py-3.5 text-center">
+          <p className="text-xl font-bold text-amber-500">{stats?.pending ?? 0}</p>
+          <p className="text-xs text-muted-foreground mt-1 whitespace-nowrap">적립 예정</p>
         </div>
-        <div className="rounded-xl border border-border bg-card p-4 text-center">
-          <p className="text-2xl font-bold text-emerald-600">{stats?.completed ?? 0}</p>
-          <p className="text-xs text-muted-foreground mt-1">적립 완료</p>
+        <div className="rounded-xl border border-border bg-card px-2 py-3.5 text-center">
+          <p className="text-xl font-bold text-emerald-600">{stats?.completed ?? 0}</p>
+          <p className="text-xs text-muted-foreground mt-1 whitespace-nowrap">적립 완료</p>
         </div>
-        <div className="rounded-xl border border-border bg-card p-4 text-center">
-          <p className="text-2xl font-bold text-primary">{(stats?.totalEarned ?? 0).toLocaleString()}P</p>
-          <p className="text-xs text-muted-foreground mt-1">누적 적립</p>
+        <div className="rounded-xl border border-border bg-card px-2 py-3.5 text-center">
+          <p className="text-xl font-bold text-primary">{(stats?.totalEarned ?? 0).toLocaleString()}P</p>
+          <p className="text-xs text-muted-foreground mt-1 whitespace-nowrap">누적 적립</p>
         </div>
       </div>
 

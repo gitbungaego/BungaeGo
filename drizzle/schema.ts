@@ -226,6 +226,9 @@ export const reservations = mysqlTable("reservations", {
   passengerEmail: varchar("passengerEmail", { length: 320 }),
   qrToken: varchar("qrToken", { length: 64 }),
   referralCode: varchar("referralCode", { length: 16 }),
+  // 사용자가 취소된 내역을 마이페이지에서 지운 시각 — 소프트 숨김(실삭제 아님).
+  // 관리자 목록/감사에는 그대로 남는다.
+  hiddenAt: timestamp("hiddenAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
