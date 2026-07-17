@@ -19,7 +19,6 @@ import {
   Bus,
   Calendar,
   Copy,
-  Gift,
   Heart,
   MapPin,
   MessageCircle,
@@ -80,10 +79,6 @@ export default function MyPage() {
               <Star className="h-3.5 w-3.5" />
               포인트
             </TabsTrigger>
-            <TabsTrigger value="referrals" className="flex-1 gap-1.5">
-              <Gift className="h-3.5 w-3.5" />
-              레퍼럴
-            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="reservations">
@@ -97,9 +92,6 @@ export default function MyPage() {
           </TabsContent>
           <TabsContent value="points">
             <PointsTab />
-          </TabsContent>
-          <TabsContent value="referrals">
-            <ReferralsTab />
           </TabsContent>
         </Tabs>
 
@@ -589,55 +581,10 @@ function LikedEventsTab() {
   );
 }
 
+// 포인트 탭 — 보유 포인트·내역과 추천 코드·적립 실적을 한 곳에 (탭 단순화).
 function PointsTab() {
   const { data: balance } = trpc.points.myBalance.useQuery();
   const { data: history, isLoading } = trpc.points.myHistory.useQuery();
-
-  return (
-    <div className="space-y-4">
-      {/* Balance Card */}
-      <div className="rounded-xl bg-gradient-to-br from-primary to-purple-500 p-5 text-white">
-        <p className="text-sm text-white/80 mb-1">보유 포인트</p>
-        <p className="text-3xl font-bold">{(balance?.balance ?? 0).toLocaleString()}P</p>
-        <p className="text-xs text-white/60 mt-2">
-          1P = 1원으로 예약 시 사용 가능
-          {balance?.expiresAt && (balance?.balance ?? 0) > 0 && (
-            <> · {formatDate(balance.expiresAt)} 소멸 예정</>
-          )}
-        </p>
-        <p className="text-[11px] text-white/50 mt-1">새 적립이 생기면 전체 잔액의 유효기간이 365일 연장돼요.</p>
-      </div>
-
-      {/* History */}
-      <div>
-        <h3 className="text-sm font-semibold mb-3">포인트 내역</h3>
-        {isLoading ? (
-          <div className="space-y-2">
-            {[1, 2, 3].map((i) => <Skeleton key={i} className="h-14 rounded-lg" />)}
-          </div>
-        ) : history && history.length > 0 ? (
-          <div className="space-y-2">
-            {history.map((p) => (
-              <div key={p.id} className="flex items-center justify-between p-3 rounded-lg border border-border bg-card">
-                <div>
-                  <p className="text-sm font-medium">{p.description}</p>
-                  <p className="text-xs text-muted-foreground">{formatDate(p.createdAt)}</p>
-                </div>
-                <span className={`text-sm font-bold ${p.amount > 0 ? "text-emerald-600" : "text-red-500"}`}>
-                  {p.amount > 0 ? "+" : ""}{p.amount.toLocaleString()}P
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-muted-foreground text-center py-8">포인트 내역이 없습니다.</p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ReferralsTab() {
   const { data: codeData, isLoading: codeLoading } = trpc.referrals.myCode.useQuery();
   const { data: stats } = trpc.referrals.myStats.useQuery();
 
@@ -659,7 +606,20 @@ function ReferralsTab() {
 
   return (
     <div className="space-y-5">
-      {/* Referral Code Card */}
+      {/* 보유 포인트 */}
+      <div className="rounded-xl bg-gradient-to-br from-primary to-purple-500 p-5 text-white">
+        <p className="text-sm text-white/80 mb-1">보유 포인트</p>
+        <p className="text-3xl font-bold">{(balance?.balance ?? 0).toLocaleString()}P</p>
+        <p className="text-xs text-white/60 mt-2">
+          1P = 1원으로 예약 시 사용 가능
+          {balance?.expiresAt && (balance?.balance ?? 0) > 0 && (
+            <> · {formatDate(balance.expiresAt)} 소멸 예정</>
+          )}
+        </p>
+        <p className="text-[11px] text-white/50 mt-1">새 적립이 생기면 전체 잔액의 유효기간이 365일 연장돼요.</p>
+      </div>
+
+      {/* 내 추천 코드 */}
       <div className="rounded-xl border border-border bg-card p-5 space-y-4">
         <div>
           <h3 className="font-semibold mb-1">내 추천 코드</h3>
@@ -689,7 +649,7 @@ function ReferralsTab() {
         </Button>
       </div>
 
-      {/* Referral Stats */}
+      {/* 적립 실적 */}
       <div className="grid grid-cols-3 gap-3">
         <div className="rounded-xl border border-border bg-card p-4 text-center">
           <p className="text-2xl font-bold text-amber-500">{stats?.pending ?? 0}</p>
@@ -709,6 +669,32 @@ function ReferralsTab() {
         적립은 해당 셔틀 운행 완료 시 지급되며, 셔틀 무산·예약 취소 시에는 지급되지 않아요.
         적립된 포인트는 마지막 적립일로부터 365일간 유효합니다.
       </p>
+
+      {/* 포인트 내역 */}
+      <div>
+        <h3 className="text-sm font-semibold mb-3">포인트 내역</h3>
+        {isLoading ? (
+          <div className="space-y-2">
+            {[1, 2, 3].map((i) => <Skeleton key={i} className="h-14 rounded-lg" />)}
+          </div>
+        ) : history && history.length > 0 ? (
+          <div className="space-y-2">
+            {history.map((p) => (
+              <div key={p.id} className="flex items-center justify-between p-3 rounded-lg border border-border bg-card">
+                <div>
+                  <p className="text-sm font-medium">{p.description}</p>
+                  <p className="text-xs text-muted-foreground">{formatDate(p.createdAt)}</p>
+                </div>
+                <span className={`text-sm font-bold ${p.amount > 0 ? "text-emerald-600" : "text-red-500"}`}>
+                  {p.amount > 0 ? "+" : ""}{p.amount.toLocaleString()}P
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground text-center py-8">포인트 내역이 없습니다.</p>
+        )}
+      </div>
     </div>
   );
 }
