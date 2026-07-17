@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { createPool, type PoolOptions } from "mysql2/promise";
 import {
@@ -32,14 +32,18 @@ import {
   InsertStopCandidate,
   InsertTrip,
   InsertUser,
+  InsertReferralEntry,
   Payment,
   PaymentCancelReason,
   PaymentItem,
   PaymentItemType,
   PaymentMethod,
   Point,
+  PointTransaction,
+  PointTxType,
   RallyPointCandidate,
   Referral,
+  ReferralEntry,
   Reservation,
   RideRequest,
   StopCandidate,
@@ -61,9 +65,12 @@ import {
   paymentItems,
   payments,
   pointInterests,
+  pointTransactions,
   points,
   rallyPointCandidates,
+  referralEntries,
   referrals,
+  rewardConfig,
   reservations,
   rideRequests,
   shuttleDemands,
@@ -75,6 +82,7 @@ import { ENV } from "./_core/env";
 import { nanoid } from "nanoid";
 import type { PipelineOutput } from "./matching/pipeline";
 import { escapeLikePattern, normalizeSearchTerm } from "./search";
+import { computeReferralReward } from "@shared/referralReward";
 
 let _db: ReturnType<typeof createMysqlDb> | null = null;
 
@@ -643,9 +651,13 @@ export async function cascadeDeleteEventWithRefunds(
       if (!cur || p.id > cur.id) latestByRes.set(p.reservationId, p);
     }
 
-    // Cancel all trips.
+    // Cancel all trips (+ 해당 트립 미지급 추천 건 VOID — referral-credit-spec §4.4).
     for (const trip of eventTrips) {
       await tx.update(trips).set({ status: "cancelled", cancelReason: "admin_cancel" }).where(eq(trips.id, trip.id));
+      await tx
+        .update(referralEntries)
+        .set({ status: "VOID" })
+        .where(and(eq(referralEntries.tripId, trip.id), inArray(referralEntries.status, ["PENDING", "FLAGGED"])));
     }
 
     const result: CascadeDeleteResult = {
@@ -681,19 +693,19 @@ export async function cascadeDeleteEventWithRefunds(
       }
 
       // Restore used points (inline, not addPoints(), to stay in this tx).
+      // 통합 원장(point_transactions)에 REFUND로 기록 — 만료일 리셋 없음(spec §6).
       if (reservation.pointsUsed > 0) {
         await tx
           .update(users)
           .set({ pointsBalance: sql`${users.pointsBalance} + ${reservation.pointsUsed}` })
           .where(eq(users.id, reservation.userId));
         const [row] = await tx.select({ pointsBalance: users.pointsBalance }).from(users).where(eq(users.id, reservation.userId));
-        await tx.insert(points).values({
+        await tx.insert(pointTransactions).values({
           userId: reservation.userId,
-          type: "refund",
+          type: "REFUND",
           amount: reservation.pointsUsed,
           balanceAfter: row?.pointsBalance ?? reservation.pointsUsed,
-          description: "이벤트 삭제로 인한 포인트 환불",
-          refId: String(reservation.id),
+          memo: `이벤트 삭제로 인한 포인트 환불 (#${reservation.id})`,
         });
         result.pointsRefunded += reservation.pointsUsed;
       }
@@ -794,6 +806,13 @@ export async function updateTripStatus(
   const patch: Partial<Trip> = { status };
   if (cancelReason !== undefined) patch.cancelReason = cancelReason;
   await db.update(trips).set(patch).where(eq(trips.id, id));
+  // 트립 취소 = 해당 트립의 미지급 추천 건 전부 VOID (referral-credit-spec §4.4).
+  // 취소 경로의 단일 관문이라 여기서 처리 — 멱등(PENDING/FLAGGED만 대상).
+  if (status === "cancelled") {
+    await voidReferralEntriesByTripId(id).catch((error) =>
+      console.error(`[updateTripStatus] referral void failed for trip ${id}:`, error)
+    );
+  }
 }
 
 // Admin edit of trip-level fields.
@@ -831,7 +850,14 @@ export async function cancelTripIfCollecting(
     .update(trips)
     .set({ status: "cancelled", cancelReason })
     .where(and(eq(trips.id, tripId), eq(trips.status, "collecting")));
-  return (result[0] as any).affectedRows > 0;
+  const didCancel = (result[0] as any).affectedRows > 0;
+  // D-5 자동취소도 추천 건 VOID (referral-credit-spec §4.4).
+  if (didCancel) {
+    await voidReferralEntriesByTripId(tripId).catch((error) =>
+      console.error(`[cancelTripIfCollecting] referral void failed for trip ${tripId}:`, error)
+    );
+  }
+  return didCancel;
 }
 
 export async function getTripsByStatus(status: Trip["status"]): Promise<Trip[]> {
@@ -1279,6 +1305,125 @@ export async function getPointsByUserId(userId: number): Promise<Point[]> {
     .orderBy(desc(points.createdAt));
 }
 
+// ─── Reward Config (referral-credit-spec §8 — 하드코딩 금지) ───────────────────
+export interface RewardConfigValues {
+  rateParticipant: number; // 동일 행사 참가자 요율
+  rateDefault: number; // 비참가 홍보자 요율
+  capKrw: number; // 요율 무관 공통 상한
+  ttlDays: number; // 포인트 유효기간(일)
+  dailyCodeEntryLimit: number; // 동일 코드 일일 신규 입력 한도
+}
+
+const REWARD_CONFIG_DEFAULTS: RewardConfigValues = {
+  rateParticipant: 0.05,
+  rateDefault: 0.02,
+  capKrw: 5000,
+  ttlDays: 365,
+  dailyCodeEntryLimit: 20,
+};
+
+const REWARD_CONFIG_KEYS: Record<string, keyof RewardConfigValues> = {
+  referral_rate_participant: "rateParticipant",
+  referral_rate_default: "rateDefault",
+  referral_cap_krw: "capKrw",
+  credit_ttl_days: "ttlDays",
+  daily_code_entry_limit: "dailyCodeEntryLimit",
+};
+
+let rewardConfigCache: { at: number; values: RewardConfigValues } | null = null;
+
+// reward_config 행이 있으면 덮어쓰고, 없으면 코드 기본값. 60초 캐시.
+export async function getRewardConfigValues(): Promise<RewardConfigValues> {
+  if (rewardConfigCache && Date.now() - rewardConfigCache.at < 60_000) {
+    return rewardConfigCache.values;
+  }
+  const values = { ...REWARD_CONFIG_DEFAULTS };
+  const db = await getDb();
+  if (db) {
+    try {
+      const rows = await db.select().from(rewardConfig);
+      for (const row of rows) {
+        const field = REWARD_CONFIG_KEYS[row.key];
+        const n = Number(row.value);
+        if (field && Number.isFinite(n)) values[field] = n;
+      }
+    } catch (error) {
+      console.warn("[rewardConfig] read failed, using defaults:", error);
+    }
+  }
+  rewardConfigCache = { at: Date.now(), values };
+  return values;
+}
+
+// ─── Point Transactions (통합 원장) ────────────────────────────────────────────
+// 모든 신규 적립/차감의 단일 경유점. SELECT ... FOR UPDATE로 유저 행을 잠가
+// 동시 이중 사용을 직렬화하고(spec 테스트 14), 적립(EARN_*) 시 만료일을
+// NOW+TTL로 전체 리셋한다 (spec §6 — SPEND/REFUND는 리셋 트리거 아님).
+export async function recordPointTransaction(opts: {
+  userId: number;
+  type: PointTxType;
+  amount: number;
+  memo?: string;
+  relatedTripId?: number;
+  relatedReferralEntryId?: number;
+  /** 레거시 회수 경로 호환 — true면 잔액이 음수가 되어도 허용 (기존 addPoints 동작). */
+  allowNegative?: boolean;
+}): Promise<{ id: number; balanceAfter: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const config = await getRewardConfigValues();
+
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .select({ pointsBalance: users.pointsBalance })
+      .from(users)
+      .where(eq(users.id, opts.userId))
+      .for("update");
+    if (!row) throw new Error(`User ${opts.userId} not found`);
+
+    const newBalance = row.pointsBalance + opts.amount;
+    if (newBalance < 0 && !opts.allowNegative) {
+      throw new Error("포인트 잔액이 부족합니다.");
+    }
+
+    const isEarn = opts.type === "EARN_REFERRAL" || opts.type === "EARN_PROMO";
+    await tx
+      .update(users)
+      .set({
+        pointsBalance: newBalance,
+        ...(isEarn && opts.amount > 0
+          ? { pointsExpiresAt: new Date(Date.now() + config.ttlDays * 24 * 60 * 60 * 1000) }
+          : {}),
+      })
+      .where(eq(users.id, opts.userId));
+
+    const result = await tx.insert(pointTransactions).values({
+      userId: opts.userId,
+      type: opts.type,
+      amount: opts.amount,
+      balanceAfter: newBalance,
+      relatedTripId: opts.relatedTripId,
+      relatedReferralEntryId: opts.relatedReferralEntryId,
+      memo: opts.memo,
+    });
+    return { id: (result[0] as any).insertId as number, balanceAfter: newBalance };
+  });
+}
+
+// 레거시 타입 → 통합 원장 타입 매핑. 기존 호출부를 전부 새 원장으로 경유시킨다.
+const LEGACY_POINT_TYPE_MAP: Record<Point["type"], PointTxType> = {
+  referral_earn: "EARN_REFERRAL",
+  booking_earn: "EARN_PROMO",
+  admin_grant: "ADMIN_ADJUST",
+  usage: "SPEND",
+  refund: "REFUND",
+  welcome: "EARN_PROMO",
+};
+
+// 기존 시그니처 유지 래퍼 — 신규 원장(point_transactions)으로 위임한다.
+// allowNegative: 기존 addPoints는 음수 잔액을 허용했고(추천 적립 회수 등),
+// 이를 유지해 취소/회수 플로우가 깨지지 않게 한다. 잔액 엄격 검증이 필요한
+// 결제 차감은 recordPointTransaction을 직접(allowNegative 없이) 호출할 것.
 export async function addPoints(
   userId: number,
   amount: number,
@@ -1288,33 +1433,285 @@ export async function addPoints(
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
-
-  // Atomic SET pointsBalance = pointsBalance + ? instead of read-then-write,
-  // so concurrent addPoints calls for the same user can't lose an update.
-  // Wrapped in a transaction so the balanceAfter read-back sees this exact
-  // write (the UPDATE's row lock blocks any other addPoints on this user
-  // until we commit) and the ledger row is written atomically with it.
-  await db.transaction(async (tx) => {
-    await tx
-      .update(users)
-      .set({ pointsBalance: sql`${users.pointsBalance} + ${amount}` })
-      .where(eq(users.id, userId));
-
-    const [row] = await tx
-      .select({ pointsBalance: users.pointsBalance })
-      .from(users)
-      .where(eq(users.id, userId));
-    const newBalance = row?.pointsBalance ?? amount;
-
-    await tx.insert(points).values({
-      userId,
-      type,
-      amount,
-      balanceAfter: newBalance,
-      description,
-      refId,
-    });
+  await recordPointTransaction({
+    userId,
+    type: LEGACY_POINT_TYPE_MAP[type],
+    amount,
+    memo: refId ? `${description} (#${refId})` : description,
+    allowNegative: true,
   });
+}
+
+export async function getPointTransactionsByUserId(userId: number): Promise<PointTransaction[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(pointTransactions)
+    .where(eq(pointTransactions.userId, userId))
+    .orderBy(desc(pointTransactions.createdAt));
+}
+
+// ─── Referral Entries (주문 단위 추천 건 — referral-credit-spec) ────────────────
+export async function createReferralEntry(data: Omit<InsertReferralEntry, "id">): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const result = await db.insert(referralEntries).values(data);
+  return (result[0] as any).insertId;
+}
+
+export async function getReferralEntryByReservationId(
+  reservationId: number
+): Promise<ReferralEntry | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(referralEntries)
+    .where(eq(referralEntries.reservationId, reservationId))
+    .limit(1);
+  return rows[0];
+}
+
+// 동일 코드 최근 24시간 신규 입력 수 (spec §7-4 속도 제한).
+export async function countRecentReferralEntriesByCode(code: string, since: Date): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const [row] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(referralEntries)
+    .where(and(eq(referralEntries.code, code), gte(referralEntries.createdAt, since)));
+  return Number(row?.count ?? 0);
+}
+
+// 참가자 요율 판정 (spec §4.2): 추천인이 동일 event의 어떤 회차든 결제 완료
+// 상태의 예약을 갖고 있는가. 판정은 추천 건 생성 시점 스냅샷으로만 쓰인다.
+export async function hasPaidReservationForEvent(userId: number, eventId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const rows = await db
+    .select({ id: reservations.id })
+    .from(reservations)
+    .innerJoin(trips, eq(reservations.tripId, trips.id))
+    .innerJoin(payments, eq(payments.reservationId, reservations.id))
+    .where(and(eq(reservations.userId, userId), eq(trips.eventId, eventId), eq(payments.status, "paid")))
+    .limit(1);
+  return rows.length > 0;
+}
+
+// VOID 처리 (spec §4.4): 결제자 취소/트립 무산. PENDING·FLAGGED만 대상 —
+// 이미 COMPLETED(지급됨)/REJECTED는 건드리지 않는다.
+export async function voidReferralEntryByReservationId(reservationId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const result = await db
+    .update(referralEntries)
+    .set({ status: "VOID" })
+    .where(
+      and(
+        eq(referralEntries.reservationId, reservationId),
+        inArray(referralEntries.status, ["PENDING", "FLAGGED"])
+      )
+    );
+  return ((result[0] as any)?.affectedRows ?? 0) > 0;
+}
+
+export async function voidReferralEntriesByTripId(tripId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const result = await db
+    .update(referralEntries)
+    .set({ status: "VOID" })
+    .where(and(eq(referralEntries.tripId, tripId), inArray(referralEntries.status, ["PENDING", "FLAGGED"])));
+  return (result[0] as any)?.affectedRows ?? 0;
+}
+
+export async function getReferralEntriesByTripId(
+  tripId: number,
+  status?: ReferralEntry["status"]
+): Promise<ReferralEntry[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(referralEntries)
+    .where(
+      status
+        ? and(eq(referralEntries.tripId, tripId), eq(referralEntries.status, status))
+        : eq(referralEntries.tripId, tripId)
+    );
+}
+
+/**
+ * 추천 건 1건 정산 (spec §4.3) — 단일 트랜잭션으로 exactly-once:
+ * entry 행을 FOR UPDATE로 잠근 뒤 PENDING일 때만 지급한다. 적립액은
+ * floor(실결제액 × 생성 시점 요율)에 상한을 적용. 유저 잔액 갱신 + 만료일
+ * 리셋(EARN) + 원장 기록 + entry COMPLETED 전환이 전부 한 트랜잭션.
+ */
+export async function settleReferralEntry(
+  entryId: number
+): Promise<{ granted: boolean; amount?: number; referrerUserId?: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const config = await getRewardConfigValues();
+
+  return db.transaction(async (tx) => {
+    const [entry] = await tx
+      .select()
+      .from(referralEntries)
+      .where(eq(referralEntries.id, entryId))
+      .for("update");
+    if (!entry || entry.status !== "PENDING") return { granted: false };
+
+    const amount = computeReferralReward(entry.paidAmount, Number(entry.appliedRate), config.capKrw);
+    const now = new Date();
+
+    let rewardTransactionId: number | null = null;
+    if (amount > 0) {
+      const [urow] = await tx
+        .select({ pointsBalance: users.pointsBalance })
+        .from(users)
+        .where(eq(users.id, entry.referrerUserId))
+        .for("update");
+      if (!urow) return { granted: false };
+      const newBalance = urow.pointsBalance + amount;
+      await tx
+        .update(users)
+        .set({
+          pointsBalance: newBalance,
+          pointsExpiresAt: new Date(now.getTime() + config.ttlDays * 24 * 60 * 60 * 1000),
+        })
+        .where(eq(users.id, entry.referrerUserId));
+      const insertResult = await tx.insert(pointTransactions).values({
+        userId: entry.referrerUserId,
+        type: "EARN_REFERRAL",
+        amount,
+        balanceAfter: newBalance,
+        relatedTripId: entry.tripId,
+        relatedReferralEntryId: entry.id,
+        memo: `추천 적립 (예약 #${entry.reservationId}, ${entry.referrerIsParticipant ? "참가자" : "기본"} 요율)`,
+      });
+      rewardTransactionId = (insertResult[0] as any).insertId as number;
+    }
+
+    await tx
+      .update(referralEntries)
+      .set({ status: "COMPLETED", rewardAmount: amount, rewardTransactionId, completedAt: now })
+      .where(eq(referralEntries.id, entryId));
+
+    return { granted: true, amount, referrerUserId: entry.referrerUserId };
+  });
+}
+
+// FLAGGED 건 관리자 결정 (spec §7-6): reject → REJECTED / approve → PENDING 복귀.
+// (approve 후 트립이 이미 completed면 호출부에서 즉시 settleReferralEntry.)
+export async function resolveFlaggedReferralEntry(
+  entryId: number,
+  action: "approve" | "reject"
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const result = await db
+    .update(referralEntries)
+    .set({ status: action === "approve" ? "PENDING" : "REJECTED" })
+    .where(and(eq(referralEntries.id, entryId), eq(referralEntries.status, "FLAGGED")));
+  return ((result[0] as any)?.affectedRows ?? 0) > 0;
+}
+
+export async function getFlaggedReferralEntries(): Promise<ReferralEntry[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(referralEntries)
+    .where(eq(referralEntries.status, "FLAGGED"))
+    .orderBy(desc(referralEntries.createdAt));
+}
+
+export interface ReferralStats {
+  pending: number;
+  completed: number;
+  flagged: number;
+  voided: number;
+  totalEarned: number;
+}
+export async function getReferralStatsByReferrer(userId: number): Promise<ReferralStats> {
+  const db = await getDb();
+  const stats: ReferralStats = { pending: 0, completed: 0, flagged: 0, voided: 0, totalEarned: 0 };
+  if (!db) return stats;
+  const rows = await db
+    .select({
+      status: referralEntries.status,
+      count: sql<number>`count(*)`,
+      sum: sql<number>`coalesce(sum(${referralEntries.rewardAmount}), 0)`,
+    })
+    .from(referralEntries)
+    .where(eq(referralEntries.referrerUserId, userId))
+    .groupBy(referralEntries.status);
+  for (const row of rows) {
+    const n = Number(row.count);
+    if (row.status === "PENDING") stats.pending = n;
+    else if (row.status === "COMPLETED") {
+      stats.completed = n;
+      stats.totalEarned = Number(row.sum);
+    } else if (row.status === "FLAGGED") stats.flagged = n;
+    else if (row.status === "VOID") stats.voided = n;
+  }
+  return stats;
+}
+
+// 교차 입력 모니터링 (spec §7-5): 서로의 코드를 입력한 유저 쌍 집계.
+export interface CrossUsagePair {
+  userA: number;
+  userB: number;
+  aToB: number; // A가 추천인, B가 결제자인 건수
+  bToA: number;
+}
+export async function getReferralCrossUsagePairs(): Promise<CrossUsagePair[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      referrerUserId: referralEntries.referrerUserId,
+      payerUserId: referralEntries.payerUserId,
+      count: sql<number>`count(*)`,
+    })
+    .from(referralEntries)
+    .groupBy(referralEntries.referrerUserId, referralEntries.payerUserId);
+
+  const byPair = new Map<string, number>();
+  for (const row of rows) {
+    byPair.set(`${row.referrerUserId}:${row.payerUserId}`, Number(row.count));
+  }
+  const result: CrossUsagePair[] = [];
+  for (const row of rows) {
+    const a = row.referrerUserId;
+    const b = row.payerUserId;
+    if (a >= b) continue; // 쌍당 1회만
+    const aToB = byPair.get(`${a}:${b}`) ?? 0;
+    const bToA = byPair.get(`${b}:${a}`) ?? 0;
+    if (aToB > 0 && bToA > 0) result.push({ userA: a, userB: b, aToB, bToA });
+  }
+  return result;
+}
+
+// ─── 포인트 만료 배치 대상 조회 (spec §6) ───────────────────────────────────────
+export async function getUsersWithExpiredPoints(now: Date): Promise<Pick<User, "id" | "pointsBalance" | "pointsExpiresAt">[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({ id: users.id, pointsBalance: users.pointsBalance, pointsExpiresAt: users.pointsExpiresAt })
+    .from(users)
+    .where(and(isNotNull(users.pointsExpiresAt), lt(users.pointsExpiresAt, now), gt(users.pointsBalance, 0)));
+}
+
+export async function getUsersWithPointsExpiringBefore(limit: Date): Promise<Pick<User, "id" | "phone" | "pointsBalance" | "pointsExpiresAt">[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({ id: users.id, phone: users.phone, pointsBalance: users.pointsBalance, pointsExpiresAt: users.pointsExpiresAt })
+    .from(users)
+    .where(and(isNotNull(users.pointsExpiresAt), lt(users.pointsExpiresAt, limit), gt(users.pointsBalance, 0)));
 }
 
 // ─── Referrals ────────────────────────────────────────────────────────────────

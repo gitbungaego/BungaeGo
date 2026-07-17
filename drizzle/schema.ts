@@ -31,6 +31,9 @@ export const users = mysqlTable("users", {
   phone: varchar("phone", { length: 20 }),
   referralCode: varchar("referralCode", { length: 16 }).unique(),
   pointsBalance: int("pointsBalance").default(0).notNull(),
+  // 포인트 만료일 — 전체 리셋 방식: 적립(EARN_*) 발생 시 NOW+TTL(기본 365일)로 갱신,
+  // 보유 잔액 전체에 적용 (referral-credit-spec §6). NULL = 만료 관리 이전 잔액(만료 없음).
+  pointsExpiresAt: timestamp("pointsExpiresAt"),
   gender: mysqlEnum("gender", ["M", "F"]),
   birthDate: date("birthDate"),
   verifiedAt: timestamp("verifiedAt"),
@@ -360,6 +363,78 @@ export const points = mysqlTable("points", {
 
 export type Point = typeof points.$inferSelect;
 export type InsertPoint = typeof points.$inferInsert;
+
+// ─── Point Transactions (신규 통합 원장 — referral-credit-spec §8) ─────────────
+// append-only. 기존 `points` 테이블은 레거시 읽기 전용으로 유지하고, 모든 신규
+// 적립/차감은 이 원장을 경유한다 (addPoints가 위임). 잔액 진실 원천은 원장 합계,
+// users.pointsBalance는 캐시(트랜잭션 내 SELECT ... FOR UPDATE로 동시 갱신).
+export const POINT_TX_TYPES = [
+  "EARN_REFERRAL",
+  "EARN_PROMO",
+  "SPEND",
+  "REFUND",
+  "EXPIRE",
+  "ADMIN_ADJUST",
+] as const;
+export type PointTxType = (typeof POINT_TX_TYPES)[number];
+
+export const pointTransactions = mysqlTable(
+  "point_transactions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("userId").notNull(),
+    type: mysqlEnum("type", POINT_TX_TYPES).notNull(),
+    amount: int("amount").notNull(), // EARN/REFUND 양수, SPEND/EXPIRE 음수
+    balanceAfter: int("balanceAfter").notNull(),
+    relatedTripId: int("relatedTripId"),
+    relatedReferralEntryId: int("relatedReferralEntryId"),
+    memo: varchar("memo", { length: 255 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => [index("idx_pt_user_created").on(t.userId, t.createdAt)]
+);
+
+export type PointTransaction = typeof pointTransactions.$inferSelect;
+
+// ─── Referral Entries (주문 단위 추천 건 — referral-credit-spec §3~4) ──────────
+// 결제(예약) 1건당 코드 1개. 셔틀(trip)이 completed 도달 시 PENDING 건을 정산해
+// 추천인에게 실결제액 × 요율(참가자 5% / 기본 2%, 상한 5,000원) 적립.
+// appliedRate는 생성 시점 스냅샷 — 이후 재판정하지 않는다 (§4.2).
+export const REFERRAL_ENTRY_STATUSES = ["PENDING", "COMPLETED", "FLAGGED", "REJECTED", "VOID"] as const;
+export type ReferralEntryStatus = (typeof REFERRAL_ENTRY_STATUSES)[number];
+
+export const referralEntries = mysqlTable(
+  "referral_entries",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    tripId: int("tripId").notNull(),
+    reservationId: int("reservationId").notNull().unique(), // 결제 1건당 코드 1개
+    payerUserId: int("payerUserId").notNull(),
+    referrerUserId: int("referrerUserId").notNull(),
+    code: varchar("code", { length: 16 }).notNull(),
+    source: mysqlEnum("source", ["LINK_PREFILL", "MANUAL"]).default("MANUAL").notNull(),
+    appliedRate: decimal("appliedRate", { precision: 4, scale: 3 }).notNull(), // 0.050 / 0.020 스냅샷
+    referrerIsParticipant: boolean("referrerIsParticipant").notNull(), // 판정 근거 기록
+    paidAmount: int("paidAmount").notNull(), // 실결제액(포인트 차감 후 실제 수금액) 스냅샷
+    status: mysqlEnum("status", REFERRAL_ENTRY_STATUSES).default("PENDING").notNull(),
+    flagReason: varchar("flagReason", { length: 200 }), // FLAGGED 사유 (관리자 검토용)
+    rewardAmount: int("rewardAmount"), // 지급 시 확정 금액
+    rewardTransactionId: int("rewardTransactionId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    completedAt: timestamp("completedAt"),
+  },
+  (t) => [index("idx_re_trip").on(t.tripId), index("idx_re_referrer").on(t.referrerUserId)]
+);
+
+export type ReferralEntry = typeof referralEntries.$inferSelect;
+export type InsertReferralEntry = typeof referralEntries.$inferInsert;
+
+// ─── Reward Config (정책 설정 — 하드코딩 금지, referral-credit-spec §8) ─────────
+// 행이 없으면 코드 기본값 사용. 관리자가 행을 넣어 요율/상한/TTL을 조정한다.
+export const rewardConfig = mysqlTable("reward_config", {
+  key: varchar("key", { length: 64 }).primaryKey(),
+  value: varchar("value", { length: 255 }).notNull(),
+});
 
 // ─── Stop Candidates (reusable pickup locations) ───────────────────────────────
 export const stopCandidates = mysqlTable("stop_candidates", {

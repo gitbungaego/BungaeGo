@@ -64,7 +64,6 @@ export default function RequestJoinPage({ eventId }: Props) {
   const [passengerName, setPassengerName] = useState(user?.name ?? "");
   const [passengerPhone, setPassengerPhone] = useState("");
   const [passengerEmail, setPassengerEmail] = useState(user?.email ?? "");
-  const [referralCode, setReferralCode] = useState("");
   const [pointsUsed, setPointsUsed] = useState(0);
 
   const { data: event, isLoading: eventLoading } = trpc.events.byId.useQuery({ id: eventId });
@@ -211,7 +210,6 @@ export default function RequestJoinPage({ eventId }: Props) {
       passengerPhone,
       passengerEmail: passengerEmail || undefined,
       pointsUsed,
-      referralCode: referralCode || undefined,
     };
 
     if (payMethod === "toss") {
@@ -407,17 +405,8 @@ export default function RequestJoinPage({ eventId }: Props) {
                   <Label htmlFor="email">이메일 (선택)</Label>
                   <Input id="email" value={passengerEmail} onChange={(e) => setPassengerEmail(e.target.value)} placeholder="example@email.com" type="email" />
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="referral">초대 코드 (선택)</Label>
-                  <Input
-                    id="referral"
-                    value={referralCode}
-                    onChange={(e) => setReferralCode(e.target.value.toUpperCase())}
-                    placeholder="친구의 초대 코드 입력"
-                    maxLength={16}
-                    className="uppercase"
-                  />
-                </div>
+                {/* 추천 코드 입력은 셔틀 예약 플로우 전용 — 자동매칭 참가 신청의
+                    적립은 트립 배정 구조가 달라 v2로 이연 (referral-credit-spec). */}
               </div>
             </div>
           )}

@@ -144,8 +144,23 @@ export default function BookingPage({ tripId }: Props) {
   const [passengerName, setPassengerName] = useState(user?.name ?? "");
   const [passengerPhone, setPassengerPhone] = useState("");
   const [passengerEmail, setPassengerEmail] = useState(user?.email ?? "");
-  const [referralCode, setReferralCode] = useState("");
+  // 공유 링크 ?ref= 프리필 (지우거나 교체 가능 — referral-credit-spec §3.2).
+  const prefilledRef = useMemo(() => {
+    try {
+      return sessionStorage.getItem("bungae_ref") ?? "";
+    } catch {
+      return "";
+    }
+  }, []);
+  const [referralCode, setReferralCode] = useState(prefilledRef);
   const [pointsUsed, setPointsUsed] = useState(0);
+
+  // 추천 코드 실시간 검증 (존재·셀프·활성) — 결제 전에 서버가 다시 검증한다.
+  const trimmedCode = referralCode.trim().toUpperCase();
+  const { data: codeCheck } = trpc.referrals.validateCode.useQuery(
+    { code: trimmedCode },
+    { enabled: trimmedCode.length >= 4, staleTime: 30_000 }
+  );
 
   const { data: entryTrip, isLoading: tripLoading } = trpc.trips.byId.useQuery({ id: tripId });
   const eventId = entryTrip?.eventId;
@@ -316,6 +331,10 @@ export default function BookingPage({ tripId }: Props) {
       toast.error("예약자 정보를 입력해주세요.");
       return;
     }
+    if (trimmedCode && codeCheck && !codeCheck.ok) {
+      toast.error(codeCheck.reason);
+      return;
+    }
     const orderInput = {
       tripId: trip.id,
       boardingPointId: selectedBp?.id ?? undefined,
@@ -325,7 +344,10 @@ export default function BookingPage({ tripId }: Props) {
       passengerPhone,
       passengerEmail: passengerEmail || undefined,
       pointsUsed,
-      referralCode: referralCode || undefined,
+      referralCode: trimmedCode || undefined,
+      referralSource: (trimmedCode && trimmedCode === prefilledRef ? "LINK_PREFILL" : "MANUAL") as
+        | "LINK_PREFILL"
+        | "MANUAL",
     };
 
     if (payMethod === "toss") {
@@ -391,16 +413,26 @@ export default function BookingPage({ tripId }: Props) {
                 <Input id="email" value={passengerEmail} onChange={(e) => setPassengerEmail(e.target.value)} placeholder="example@email.com" type="email" />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="referral">초대 코드 (선택)</Label>
+                <Label htmlFor="referral">추천 코드 (선택)</Label>
                 <Input
                   id="referral"
                   value={referralCode}
                   onChange={(e) => setReferralCode(e.target.value.toUpperCase())}
-                  placeholder="친구의 초대 코드 입력"
+                  placeholder="친구의 추천 코드 입력"
                   maxLength={16}
                   className="uppercase"
                 />
-                <p className="text-xs text-muted-foreground">초대 코드 입력 시 1,000P 적립</p>
+                {trimmedCode.length >= 4 && codeCheck ? (
+                  codeCheck.ok ? (
+                    <p className="text-xs text-emerald-600">사용 가능한 코드예요.</p>
+                  ) : (
+                    <p className="text-xs text-destructive">{codeCheck.reason}</p>
+                  )
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    셔틀 운행이 완료되면 코드 주인에게 실결제액의 2~5% (최대 5,000P)가 적립돼요.
+                  </p>
+                )}
               </div>
             </div>
             <Button

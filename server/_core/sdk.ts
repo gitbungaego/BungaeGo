@@ -326,6 +326,7 @@ class SDKServer {
           phone: null,
           referralCode: null,
           pointsBalance: 0,
+          pointsExpiresAt: null,
           gender: null,
           birthDate: null,
           verifiedAt: null,

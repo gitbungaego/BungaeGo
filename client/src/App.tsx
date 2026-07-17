@@ -146,6 +146,15 @@ function Router() {
   );
 }
 
+// 공유 링크의 ?ref= 추천 코드를 세션에 보관 — 가입 귀속이 아니라 결제 화면
+// 코드 입력란 프리필용 (referral-credit-spec §3.2). 결제자는 지우거나 교체 가능.
+const refParam = new URLSearchParams(window.location.search).get("ref");
+if (refParam && /^[A-Za-z0-9]{4,16}$/.test(refParam)) {
+  try {
+    sessionStorage.setItem("bungae_ref", refParam.toUpperCase());
+  } catch {}
+}
+
 function App() {
   return (
     <ErrorBoundary>

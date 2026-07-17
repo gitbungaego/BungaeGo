@@ -15,6 +15,7 @@ import {
   updatePaymentStatus,
   updateReferralStatus,
   updateRideRequestStatus,
+  voidReferralEntryByReservationId,
 } from "./db";
 import { cancelTossPayment } from "./toss";
 import { TRPCError } from "@trpc/server";
@@ -334,4 +335,9 @@ export async function adminCancelReservation(
     await addPoints(referral.refereeId, -referral.refereePoints, "usage", "예약 취소로 인한 추천 적립 회수", String(res.id));
     await updateReferralStatus(referral.id, "cancelled");
   }
+
+  // 신규 추천 건 VOID (referral-credit-spec §4.4 — 관리자 취소도 결제자 취소와 동일).
+  await voidReferralEntryByReservationId(res.id).catch((error) =>
+    console.error(`[adminCancelReservation] referral void failed for reservation ${res.id}:`, error)
+  );
 }

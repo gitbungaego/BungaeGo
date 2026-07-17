@@ -18,7 +18,6 @@ import {
 import {
   Bus,
   Calendar,
-  CheckCircle2,
   Copy,
   Gift,
   Heart,
@@ -600,7 +599,13 @@ function PointsTab() {
       <div className="rounded-xl bg-gradient-to-br from-primary to-purple-500 p-5 text-white">
         <p className="text-sm text-white/80 mb-1">보유 포인트</p>
         <p className="text-3xl font-bold">{(balance?.balance ?? 0).toLocaleString()}P</p>
-        <p className="text-xs text-white/60 mt-2">1P = 1원으로 예약 시 사용 가능</p>
+        <p className="text-xs text-white/60 mt-2">
+          1P = 1원으로 예약 시 사용 가능
+          {balance?.expiresAt && (balance?.balance ?? 0) > 0 && (
+            <> · {formatDate(balance.expiresAt)} 소멸 예정</>
+          )}
+        </p>
+        <p className="text-[11px] text-white/50 mt-1">새 적립이 생기면 전체 잔액의 유효기간이 365일 연장돼요.</p>
       </div>
 
       {/* History */}
@@ -633,13 +638,8 @@ function PointsTab() {
 }
 
 function ReferralsTab() {
-  const { data: referrals, isLoading: refLoading } = trpc.referrals.myList.useQuery();
   const { data: codeData, isLoading: codeLoading } = trpc.referrals.myCode.useQuery();
-
-  // Only completed referrals count toward stats — cancelled ones (e.g. the
-  // referring reservation was cancelled and the bonus clawed back) must not
-  // inflate the friend count or the earned-points total.
-  const completedReferrals = (referrals ?? []).filter((r) => r.status === "completed");
+  const { data: stats } = trpc.referrals.myStats.useQuery();
 
   const shareUrl = codeData?.code
     ? `${window.location.origin}/events?ref=${codeData.code}`
@@ -648,13 +648,13 @@ function ReferralsTab() {
   const copyCode = () => {
     if (!codeData?.code) return;
     navigator.clipboard.writeText(codeData.code);
-    toast.success("초대 코드가 복사되었습니다!");
+    toast.success("추천 코드가 복사되었습니다!");
   };
 
   const copyLink = () => {
     if (!shareUrl) return;
     navigator.clipboard.writeText(shareUrl);
-    toast.success("초대 링크가 복사되었습니다!");
+    toast.success("추천 링크가 복사되었습니다!");
   };
 
   return (
@@ -662,9 +662,11 @@ function ReferralsTab() {
       {/* Referral Code Card */}
       <div className="rounded-xl border border-border bg-card p-5 space-y-4">
         <div>
-          <h3 className="font-semibold mb-1">내 초대 코드</h3>
+          <h3 className="font-semibold mb-1">내 추천 코드</h3>
           <p className="text-xs text-muted-foreground">
-            친구가 내 코드로 예약하면 친구 1,000P, 나 2,000P 적립!
+            친구가 결제할 때 내 코드를 입력하고 그 셔틀이 운행 완료되면, 실결제액의{" "}
+            <b>2%</b>(같은 행사에 나도 참가 중이면 <b>5%</b>, 건당 최대 5,000P)가 적립돼요.
+            횟수 제한 없이 매 결제마다 적립!
           </p>
         </div>
 
@@ -683,43 +685,30 @@ function ReferralsTab() {
 
         <Button variant="outline" className="w-full gap-2" onClick={copyLink}>
           <Share2 className="h-4 w-4" />
-          초대 링크 복사
+          추천 링크 복사
         </Button>
       </div>
 
       {/* Referral Stats */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-3 gap-3">
         <div className="rounded-xl border border-border bg-card p-4 text-center">
-          <p className="text-2xl font-bold text-primary">{completedReferrals.length}</p>
-          <p className="text-xs text-muted-foreground mt-1">초대한 친구</p>
+          <p className="text-2xl font-bold text-amber-500">{stats?.pending ?? 0}</p>
+          <p className="text-xs text-muted-foreground mt-1">적립 예정</p>
         </div>
         <div className="rounded-xl border border-border bg-card p-4 text-center">
-          <p className="text-2xl font-bold text-primary">
-            {completedReferrals
-              .reduce((sum, r) => sum + r.referrerPoints, 0)
-              .toLocaleString()}P
-          </p>
-          <p className="text-xs text-muted-foreground mt-1">레퍼럴 적립 포인트</p>
+          <p className="text-2xl font-bold text-emerald-600">{stats?.completed ?? 0}</p>
+          <p className="text-xs text-muted-foreground mt-1">적립 완료</p>
+        </div>
+        <div className="rounded-xl border border-border bg-card p-4 text-center">
+          <p className="text-2xl font-bold text-primary">{(stats?.totalEarned ?? 0).toLocaleString()}P</p>
+          <p className="text-xs text-muted-foreground mt-1">누적 적립</p>
         </div>
       </div>
 
-      {/* Referral History */}
-      {!refLoading && completedReferrals.length > 0 && (
-        <div>
-          <h3 className="text-sm font-semibold mb-3">초대 내역</h3>
-          <div className="space-y-2">
-            {completedReferrals.map((r) => (
-              <div key={r.id} className="flex items-center justify-between p-3 rounded-lg border border-border bg-card text-sm">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                  <span className="text-muted-foreground">친구 초대 완료</span>
-                </div>
-                <span className="text-xs text-muted-foreground">{formatDate(r.createdAt)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <p className="text-[11px] text-muted-foreground">
+        적립은 해당 셔틀 운행 완료 시 지급되며, 셔틀 무산·예약 취소 시에는 지급되지 않아요.
+        적립된 포인트는 마지막 적립일로부터 365일간 유효합니다.
+      </p>
     </div>
   );
 }

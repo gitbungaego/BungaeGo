@@ -40,8 +40,12 @@ import {
   createEventRequest,
   getEventRequests,
   getEventRequestsByUserId,
+  getFlaggedReferralEntries,
   getInterestedCandidateIds,
   getPaymentByOrderId,
+  getPointTransactionsByUserId,
+  getReferralCrossUsagePairs,
+  getReferralStatsByReferrer,
   getShuttleDemandStatus,
   getShuttleDemandSummary,
   getShuttleDemandsByUserId,
@@ -61,6 +65,7 @@ import {
   getRideRequestsByUserId,
   getTripById,
   getTripsByEventId,
+  getUserById,
   getUserByOpenId,
   getUserByReferralCode,
   setStopCandidateActive,
@@ -93,6 +98,22 @@ import {
   validatePointsUsage,
   type TossOrderContext,
 } from "./reservationFlow";
+import {
+  resolveFlagged,
+  settleTripReferrals,
+  validateReferralCode,
+  voidReservationReferral,
+} from "./referralCredit";
+
+// 통합 원장 타입의 표시 라벨 (memo가 없을 때 폴백).
+const POINT_TX_TYPE_LABELS: Record<string, string> = {
+  EARN_REFERRAL: "추천 적립",
+  EARN_PROMO: "이벤트 적립",
+  SPEND: "포인트 사용",
+  REFUND: "포인트 환불",
+  EXPIRE: "유효기간 만료 소멸",
+  ADMIN_ADJUST: "운영자 조정",
+};
 import { auditLog } from "./audit";
 import { filterUnservedCandidates } from "./pointInterests";
 import { cancelTossPayment, confirmTossPayment, isTossEnabled, TossApiError } from "./toss";
@@ -456,6 +477,12 @@ export const appRouter = router({
           await cancelReservationsForTrip(trip);
         }
 
+        // 운행 완료 = 추천 건 적립 확정 시점 (referral-credit-spec §4.3).
+        // settleReferralEntry가 건별 PENDING 조건부 전환이라 중복 호출에도 안전.
+        if (input.status === "completed") {
+          await settleTripReferrals(input.id);
+        }
+
         return { success: true };
       }),
 
@@ -594,6 +621,7 @@ export const appRouter = router({
           passengerEmail: z.string().email().optional(),
           pointsUsed: z.number().min(0).default(0),
           referralCode: z.string().optional(),
+          referralSource: z.enum(["LINK_PREFILL", "MANUAL"]).optional(),
           paymentMethod: z.string().optional(),
         })
       )
@@ -610,6 +638,12 @@ export const appRouter = router({
 
         const trip = await getTripById(input.tripId);
         if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
+
+        // 추천 코드는 결제 전에 검증해 거부한다 (spec §3.3 — 셀프/무효 코드).
+        if (input.referralCode) {
+          const check = await validateReferralCode(input.referralCode, ctx.user.id);
+          if (!check.ok) throw new TRPCError({ code: "BAD_REQUEST", message: check.reason });
+        }
 
         const unitPrice = resolveTicketUnitPrice(trip, input.ticketType);
         const reservationId = await finalizeReservation(ctx.user, input, async (id) => {
@@ -695,6 +729,10 @@ export const appRouter = router({
           await updateReferralStatus(referral.id, "cancelled");
         }
 
+        // 신규 추천 건은 결제자 자진 취소 시 해당 건만 VOID (spec §4.4 — 주문
+        // 단위라 같은 코드의 다른 결제 건에는 영향 없음).
+        await voidReservationReferral(res.id);
+
         return { success: true };
       }),
 
@@ -737,6 +775,7 @@ export const appRouter = router({
             passengerEmail: z.string().email().optional(),
             pointsUsed: z.number().min(0).default(0),
             referralCode: z.string().optional(),
+            referralSource: z.enum(["LINK_PREFILL", "MANUAL"]).optional(),
           }),
           z.object({
             kind: z.literal("rideRequest"),
@@ -771,6 +810,12 @@ export const appRouter = router({
         if (input.kind === "reservation") {
           const trip = await getTripById(input.tripId);
           if (!trip) throw new TRPCError({ code: "NOT_FOUND", message: "셔틀을 찾을 수 없습니다." });
+
+          // 추천 코드는 결제창 진입 전에 거부 (spec §3.3).
+          if (input.referralCode) {
+            const check = await validateReferralCode(input.referralCode, ctx.user.id);
+            if (!check.ok) throw new TRPCError({ code: "BAD_REQUEST", message: check.reason });
+          }
 
           const unitPrice = resolveTicketUnitPrice(trip, input.ticketType);
           validatePointsUsage(input.pointsUsed, ctx.user.pointsBalance, unitPrice * input.seats);
@@ -1099,15 +1144,39 @@ export const appRouter = router({
 
   // ─── Points ────────────────────────────────────────────────────────────────
   points: router({
-    myHistory: protectedProcedure.query(({ ctx }) =>
-      getPointsByUserId(ctx.user.id)
-    ),
+    // 통합 원장(point_transactions) + 레거시(points) 병합 내역 — 최신순.
+    myHistory: protectedProcedure.query(async ({ ctx }) => {
+      const [legacy, ledger] = await Promise.all([
+        getPointsByUserId(ctx.user.id),
+        getPointTransactionsByUserId(ctx.user.id),
+      ]);
+      const merged = [
+        ...ledger.map((t) => ({
+          id: `t-${t.id}`,
+          amount: t.amount,
+          description: t.memo ?? POINT_TX_TYPE_LABELS[t.type] ?? t.type,
+          createdAt: t.createdAt,
+        })),
+        ...legacy.map((p) => ({
+          id: `p-${p.id}`,
+          amount: p.amount,
+          description: p.description ?? p.type,
+          createdAt: p.createdAt,
+        })),
+      ];
+      merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      return merged;
+    }),
     myBalance: protectedProcedure.query(async ({ ctx }) => {
-      return { balance: ctx.user.pointsBalance ?? 0 };
+      return {
+        balance: ctx.user.pointsBalance ?? 0,
+        // 전체 리셋 방식 만료일 (referral-credit-spec §6). null = 만료 관리 이전 잔액.
+        expiresAt: ctx.user.pointsExpiresAt ?? null,
+      };
     }),
   }),
 
-  // ─── Referrals ─────────────────────────────────────────────────────────────
+  // ─── Referrals (주문 단위 추천·크레딧 — referral-credit-spec) ─────────────────
   referrals: router({
     myCode: protectedProcedure.query(async ({ ctx }) => {
       const code = await ensureReferralCode(ctx.user.id);
@@ -1116,6 +1185,14 @@ export const appRouter = router({
     myList: protectedProcedure.query(({ ctx }) =>
       getReferralsByUserId(ctx.user.id)
     ),
+
+    // 결제 화면 실시간 검증 (spec §10): 존재·셀프·활성.
+    validateCode: protectedProcedure
+      .input(z.object({ code: z.string().min(1).max(16) }))
+      .query(({ input, ctx }) => validateReferralCode(input.code, ctx.user.id)),
+
+    // 내 추천 실적: 건수(대기/지급/보류/무효) + 누적 적립액.
+    myStats: protectedProcedure.query(({ ctx }) => getReferralStatsByReferrer(ctx.user.id)),
   }),
 
   // ─── Stop Candidates (admin-managed reusable pickup points) ──────────────────
@@ -1191,6 +1268,43 @@ export const appRouter = router({
 
   // ─── Admin ─────────────────────────────────────────────────────────────────
   admin: router({
+    // ── 레퍼럴 관리 (referral-credit-spec §7-6, §7-5) ──
+    referral: router({
+      listFlagged: adminProcedure.query(async () => {
+        const entries = await getFlaggedReferralEntries();
+        // 관리자 화면 표시용 이름 붙이기 (건수 적어 개별 조회로 충분).
+        return Promise.all(
+          entries.map(async (e) => {
+            const [payer, referrer] = await Promise.all([
+              getUserById(e.payerUserId),
+              getUserById(e.referrerUserId),
+            ]);
+            return { ...e, payerName: payer?.name ?? null, referrerName: referrer?.name ?? null };
+          })
+        );
+      }),
+
+      resolve: adminProcedure
+        .input(z.object({ id: z.number(), action: z.enum(["approve", "reject"]) }))
+        .mutation(async ({ input, ctx }) => {
+          const ok = await resolveFlagged(input.id, input.action);
+          if (!ok) throw new TRPCError({ code: "NOT_FOUND", message: "처리할 수 없는 건입니다 (이미 처리됨)." });
+          auditLog(ctx.user.id, "referral.resolve", { type: "referralEntry", id: input.id }, { action: input.action });
+          return { success: true } as const;
+        }),
+
+      // 교차 입력 모니터링 — 서로의 코드를 입력한 유저 쌍 집계 (파일럿: 노출만).
+      crossUsage: adminProcedure.query(async () => {
+        const pairs = await getReferralCrossUsagePairs();
+        return Promise.all(
+          pairs.map(async (p) => {
+            const [a, b] = await Promise.all([getUserById(p.userA), getUserById(p.userB)]);
+            return { ...p, userAName: a?.name ?? null, userBName: b?.name ?? null };
+          })
+        );
+      }),
+    }),
+
     users: adminProcedure.query(() => getAllUsers()),
     updateUserStatus: adminProcedure
       .input(z.object({ userId: z.number(), status: z.enum(USER_STATUSES) }))

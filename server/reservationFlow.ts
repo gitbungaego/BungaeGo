@@ -5,16 +5,14 @@ import type { User } from "../drizzle/schema";
 import {
   addPoints,
   confirmTripIfCollecting,
-  createReferral,
   createRideRequest,
   getBungaetingProfileByUserId,
   getEventById,
-  getReferralByPair,
   getReservationsWithPaymentsByTripId,
   getTripById,
-  getUserByReferralCode,
   reserveSeatsWithLock,
 } from "./db";
+import { createEntryForReservation } from "./referralCredit";
 import { getPolicy, type PolicyContext } from "./matching/confirmPolicy";
 import { buildGenderMap } from "./bungaeting/policy";
 import { notifyTrip } from "./notify/tripMessenger";
@@ -106,6 +104,8 @@ export interface ReservationOrderInput {
   passengerEmail?: string;
   pointsUsed: number;
   referralCode?: string;
+  /** 코드 입력 경로 (spec §3.2): 링크 프리필 vs 직접 입력. 기본 MANUAL. */
+  referralSource?: "LINK_PREFILL" | "MANUAL";
 }
 
 /**
@@ -133,15 +133,6 @@ export async function finalizeReservation(
   const ticketType: TicketType = input.ticketType ?? "round";
   const unitPrice = resolveTicketUnitPrice(trip, ticketType);
   validatePointsUsage(input.pointsUsed, user.pointsBalance, unitPrice * input.seats);
-
-  // Handle referral (doesn't touch seat capacity, safe outside the lock)
-  let referrerId: number | undefined;
-  if (input.referralCode) {
-    const referrer = await getUserByReferralCode(input.referralCode);
-    if (referrer && referrer.id !== user.id) {
-      referrerId = referrer.id;
-    }
-  }
 
   // 번개팅 회차는 신청자의 프로필/성별/만 나이(탑승일 기준)를 자격 검증에 쓴다.
   // 프로필은 락 밖에서 미리 조회 — 안정적(예약 트랜잭션에서 안 바뀜)이므로 안전.
@@ -211,21 +202,18 @@ export async function finalizeReservation(
     await addPoints(user.id, -input.pointsUsed, "usage", "예약 포인트 사용", String(reservationId));
   }
 
-  // Referral points — once per referrer/referee pair, ever (including
-  // pairs whose original referral was later cancelled), so a reserve →
-  // cancel → reserve loop with the same code can't re-earn the bonus.
-  if (referrerId) {
-    const existingReferral = await getReferralByPair(referrerId, user.id);
-    if (!existingReferral) {
-      await createReferral({
-        referrerId,
-        refereeId: user.id,
-        reservationId,
-        status: "completed",
-      });
-      await addPoints(referrerId, 2000, "referral_earn", "친구 초대 적립", String(reservationId));
-      await addPoints(user.id, 1000, "referral_earn", "초대 코드 사용 적립", String(reservationId));
-    }
+  // 추천 건 생성 (referral-credit-spec §3~4): 즉시 적립 대신 주문 단위
+  // PENDING 기록 — 지급은 트립 completed 정산에서. 실결제액(포인트 차감 후
+  // 실제 수금액)과 요율을 생성 시점에 스냅샷한다. 실패해도 예약은 유지.
+  if (input.referralCode) {
+    await createEntryForReservation({
+      trip,
+      reservationId,
+      payer: user,
+      code: input.referralCode,
+      source: input.referralSource ?? "MANUAL",
+      paidAmount: unitPrice * input.seats - input.pointsUsed,
+    }).catch((error) => console.error("[finalizeReservation] referral entry failed:", error));
   }
 
   return reservationId;
@@ -277,14 +265,6 @@ export async function finalizeRideRequest(
   validatePointsUsage(input.pointsUsed, user.pointsBalance, fareAmount);
   const totalAmount = fareAmount - input.pointsUsed;
 
-  let referrerId: number | undefined;
-  if (input.referralCode) {
-    const referrer = await getUserByReferralCode(input.referralCode);
-    if (referrer && referrer.id !== user.id) {
-      referrerId = referrer.id;
-    }
-  }
-
   const requestId = await createRideRequest({
     eventId: input.eventId,
     userId: user.id,
@@ -309,15 +289,7 @@ export async function finalizeRideRequest(
     await addPoints(user.id, -input.pointsUsed, "usage", "참가 신청 포인트 사용", String(requestId));
   }
 
-  if (referrerId) {
-    await createReferral({
-      referrerId,
-      refereeId: user.id,
-      status: "completed",
-    });
-    await addPoints(referrerId, 2000, "referral_earn", "친구 초대 적립", String(requestId));
-    await addPoints(user.id, 1000, "referral_earn", "초대 코드 사용 적립", String(requestId));
-  }
-
+  // 추천 코드는 referralCodeUsed로 기록만 남긴다 — 자동매칭(track B)의 적립은
+  // 트립 배정 구조가 달라 v2로 이연 (referral-credit-spec은 예약 단위 적립만 정의).
   return requestId;
 }
