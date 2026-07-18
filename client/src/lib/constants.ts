@@ -8,6 +8,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   expo: "엑스포",
   fair: "박람회",
   forum: "포럼",
+  tourist: "관광지",
   other: "기타",
   all: "전체",
 };
@@ -38,6 +39,13 @@ export const CATEGORY_CHIPS: { key: string; label: string; emoji: string; bg: st
   { key: "expo", label: "엑스포", emoji: "🌐", bg: "bg-cyan-50" },
   { key: "fair", label: "박람회", emoji: "🏬", bg: "bg-indigo-50" },
   { key: "forum", label: "포럼", emoji: "🎙️", bg: "bg-teal-50" },
+];
+
+// 이벤트 만들기(신청 폼) 전용 추가 카테고리 — 홈 브라우징 칩에는 미노출.
+// (관광지는 events 분류 enum에 없는 신청 전용 분류라 필터 칩으로 쓰지 않는다)
+export const REQUEST_EXTRA_CHIPS: { key: string; label: string; emoji: string; bg: string }[] = [
+  { key: "tourist", label: "관광지", emoji: "🏞️", bg: "bg-lime-50" },
+  { key: "other", label: "기타", emoji: "✨", bg: "bg-gray-50" },
 ];
 
 export const TRIP_STATUS_LABELS: Record<string, string> = {

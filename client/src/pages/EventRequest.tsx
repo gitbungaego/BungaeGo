@@ -9,12 +9,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ARRIVAL_PREF_OPTIONS, CATEGORY_CHIPS } from "@/lib/constants";
+import { ARRIVAL_PREF_OPTIONS, CATEGORY_CHIPS, REQUEST_EXTRA_CHIPS } from "@/lib/constants";
 import { CalendarPlus } from "lucide-react";
 
 // 이벤트 만들기 — 번개고에 아직 등록되지 않은 행사의 셔틀을 신청하는 요청서.
 // 운영자가 검토 후 실제 이벤트/셔틀로 개설한다 (관리자 콘솔 '신청' 탭에서 확인).
-const CATEGORIES = CATEGORY_CHIPS.filter((c) => c.key !== "all");
+const CATEGORIES = [...CATEGORY_CHIPS.filter((c) => c.key !== "all"), ...REQUEST_EXTRA_CHIPS];
 
 export default function EventRequestPage() {
   const { isAuthenticated, loading } = useAuth();
