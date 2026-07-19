@@ -2334,6 +2334,24 @@ export async function getBungaetingPreferenceByUserId(
 
 // 선호 등록은 유저당 1건 — 있으면 갱신, 없으면 삽입. userId UNIQUE 인덱스로
 // onDuplicateKeyUpdate가 원자적으로 한 행만 유지한다.
+// 새 회차 알림 대상: 알림 받기 ON 선호 전체 + 연락처. 매칭 필터는 호출부
+// (preferenceMatch.matchesPreference)에서 JS로 — 파일럿 규모 전제.
+export interface BungaetingNotifyTarget {
+  userId: number;
+  phone: string | null;
+  pref: BungaetingPreference;
+}
+export async function getBungaetingNotifyTargets(): Promise<BungaetingNotifyTarget[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ pref: bungaetingPreferences, phone: users.phone })
+    .from(bungaetingPreferences)
+    .innerJoin(users, eq(bungaetingPreferences.userId, users.id))
+    .where(eq(bungaetingPreferences.smsOptIn, true));
+  return rows.map((r) => ({ userId: r.pref.userId, phone: r.phone, pref: r.pref }));
+}
+
 export async function upsertBungaetingPreference(
   userId: number,
   data: Omit<InsertBungaetingPreference, "id" | "userId">

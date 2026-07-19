@@ -25,6 +25,7 @@ import { bungaetingAdminRouter } from "./adminRouter";
 import { bungaetingProcedure } from "./procedure";
 import { buildGenderMap, buildThemeConfig, parseBungaetingConfig } from "./policy";
 import { bungaetingConfigInput } from "./tripConfigInput";
+import { notifyMatchingPreferences } from "./preferenceMatch";
 import { proposalRouter } from "./proposalRouter";
 import { verificationAdapter } from "./verification";
 
@@ -209,6 +210,14 @@ export const bungaetingRouter = router({
           notes: input.notes,
           creatorId: ctx.user.id,
         });
+
+        // 선호 조건에 맞는(알림 받기 ON) 유저에게 새 회차 알림 — 생성 플로우를
+        // 깨지 않게 fire-and-forget. 채널은 sendSms mock(알림톡 연동 시 교체).
+        notifyMatchingPreferences(
+          { id, creatorId: ctx.user.id, departureAt: new Date(input.departureAt), themeConfig },
+          event
+        ).catch((error) => console.warn("[bungaeting.trips.create] preference notify failed:", error));
+
         return { id };
       }),
 
