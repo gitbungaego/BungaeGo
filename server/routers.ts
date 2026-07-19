@@ -68,6 +68,7 @@ import {
   getRideRequestsByUserId,
   getTripById,
   getTripsByEventId,
+  getUpcomingTicketsForUser,
   getUserById,
   getUserByOpenId,
   getUserByReferralCode,
@@ -756,6 +757,9 @@ export const appRouter = router({
 
         return { success: true };
       }),
+
+    // 탑승권: 결제 완료 + 출발 전 예약 (마이페이지 예약 내역 상단 노출용).
+    myTickets: protectedProcedure.query(({ ctx }) => getUpcomingTicketsForUser(ctx.user.id)),
 
     // 취소/환불된 내역을 마이페이지에서 숨긴다 (소프트 삭제 — DB엔 남음).
     // 활성(paid/pending) 예약은 숨길 수 없다.

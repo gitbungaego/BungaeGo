@@ -137,3 +137,12 @@ button:active:not(:disabled) {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+/* 탑승권(BoardingPass) 마키 — "번개GO 탑승권" 무한 스크롤 띠 */
+.animate-bp-marquee {
+  animation: bpMarquee 16s linear infinite;
+}
+@keyframes bpMarquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}

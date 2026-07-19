@@ -1093,6 +1093,67 @@ export async function getReservationsByUserId(userId: number): Promise<Reservati
   return rows.map((r) => flattenReservation(r, paymentsByReservation.get(r.id)));
 }
 
+// 탑승권 (마이페이지 예약 내역 상단): 결제 완료 + 숨기지 않은 + 아직 출발 전
+// (왕복은 귀가편 기준) 예약을 트립·이벤트·탑승지와 함께 반환.
+export interface TicketRow {
+  reservationId: number;
+  seats: number;
+  ticketType: Reservation["ticketType"];
+  passengerName: string | null;
+  passengerPhone: string | null;
+  trip: Pick<Trip, "id" | "departureAt" | "returnAt" | "isRoundTrip" | "status">;
+  event: { title: string; venue: string };
+  boardingPoint: { name: string; pickupTime: Date | null } | null;
+}
+export async function getUpcomingTicketsForUser(userId: number): Promise<TicketRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      reservation: reservations,
+      trip: trips,
+      eventTitle: events.title,
+      eventVenue: events.venue,
+      bpName: boardingPoints.name,
+      bpPickupTime: boardingPoints.pickupTime,
+    })
+    .from(reservations)
+    .innerJoin(trips, eq(reservations.tripId, trips.id))
+    .innerJoin(events, eq(trips.eventId, events.id))
+    .leftJoin(boardingPoints, eq(reservations.boardingPointId, boardingPoints.id))
+    .where(and(eq(reservations.userId, userId), isNull(reservations.hiddenAt)))
+    .orderBy(trips.departureAt);
+
+  const paymentsByReservation = await getLatestPaymentsByReservationIds(rows.map((r) => r.reservation.id));
+  // 당일 운행 중에도 보이도록 6시간 여유를 둔다.
+  const cutoff = Date.now() - 6 * 60 * 60 * 1000;
+
+  return rows
+    .filter((r) => {
+      const payment = paymentsByReservation.get(r.reservation.id);
+      if (payment?.status !== "paid") return false;
+      if (!["collecting", "confirmed", "in_progress"].includes(r.trip.status)) return false;
+      const lastLeg = r.trip.returnAt ?? r.trip.departureAt;
+      return new Date(lastLeg).getTime() >= cutoff;
+    })
+    .map((r) => ({
+      reservationId: r.reservation.id,
+      seats: r.reservation.seats,
+      ticketType: r.reservation.ticketType,
+      passengerName: r.reservation.passengerName,
+      passengerPhone: r.reservation.passengerPhone,
+      trip: {
+        id: r.trip.id,
+        departureAt: r.trip.departureAt,
+        returnAt: r.trip.returnAt,
+        isRoundTrip: r.trip.isRoundTrip,
+        status: r.trip.status,
+      },
+      event: { title: r.eventTitle, venue: r.eventVenue },
+      boardingPoint: r.bpName ? { name: r.bpName, pickupTime: r.bpPickupTime } : null,
+    }));
+}
+
 // 취소된 예약 내역 소프트 숨김 (사용자 '내역 삭제').
 export async function hideReservation(id: number): Promise<void> {
   const db = await getDb();

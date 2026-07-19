@@ -32,6 +32,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Link } from "wouter";
+import { BoardingPass } from "@/components/BoardingPass";
 
 export default function MyPage() {
   const { user, isAuthenticated, loading } = useAuth();
@@ -204,6 +205,8 @@ function ProfileCard() {
 
 function ReservationsTab() {
   const { data: reservations, isLoading, refetch } = trpc.reservations.myList.useQuery();
+  // 탑승권 — 결제 완료 + 출발 전 예약을 핸디버스식 티켓으로 목록 최상단에.
+  const { data: tickets } = trpc.reservations.myTickets.useQuery();
   const utils = trpc.useUtils();
 
   const cancelReservation = trpc.reservations.cancel.useMutation({
@@ -244,6 +247,7 @@ function ReservationsTab() {
 
   return (
     <div className="space-y-3">
+      {tickets && tickets.length > 0 && <BoardingPass tickets={tickets} />}
       {reservations.map((res) => (
         <ReservationCard
           key={res.id}

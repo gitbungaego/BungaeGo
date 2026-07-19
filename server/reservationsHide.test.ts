@@ -6,6 +6,7 @@ vi.mock("./db", async (importOriginal) => {
     ...actual,
     getReservationById: vi.fn(),
     hideReservation: vi.fn(),
+    getUpcomingTicketsForUser: vi.fn(),
   };
 });
 
@@ -28,6 +29,20 @@ function ctx(userId: number | null): TrpcContext {
 
 afterEach(() => {
   Object.values(db).forEach((f) => { if (vi.isMockFunction(f)) f.mockReset(); });
+});
+
+// 탑승권 — 본인 것만, 로그인 필수
+describe("reservations.myTickets", () => {
+  it("본인 userId로 조회", async () => {
+    vi.mocked(db.getUpcomingTicketsForUser).mockResolvedValue([]);
+    await expect(appRouter.createCaller(ctx(7)).reservations.myTickets()).resolves.toEqual([]);
+    expect(db.getUpcomingTicketsForUser).toHaveBeenCalledWith(7);
+  });
+
+  it("비로그인 → UNAUTHORIZED", async () => {
+    await expect(appRouter.createCaller(ctx(null)).reservations.myTickets())
+      .rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
 });
 
 // 마이페이지 '내역 삭제' — 취소/환불된 예약만 소프트 숨김
