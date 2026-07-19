@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Lightbulb, Plus } from "lucide-react";
 import { GENDER_MODE_LABELS } from "@/lib/bungaeting";
-import { formatDateTime } from "@/lib/constants";
+import { CATEGORY_CHIPS, formatDateTime } from "@/lib/constants";
 
 // 회차 제안 목록 + 찜 (spec §3-5). "이 회차에 관심"이지 "이 사람과 함께"가 아님(§4):
 // 특정인 지목/연결 요소 없음, 순수 행사·날짜 관심 표시.
@@ -98,7 +98,12 @@ export default function BungaetingProposals() {
 
 function ProposalForm({ onDone }: { onDone: () => void }) {
   const utils = trpc.useUtils();
-  const { data: events } = trpc.events.list.useQuery({ limit: 50 });
+  // 카테고리 먼저 선택 → 그 카테고리의 행사만 목록에 노출 (서버 필터 재사용).
+  const [category, setCategory] = useState("all");
+  const { data: events } = trpc.events.list.useQuery({
+    category: category === "all" ? undefined : category,
+    limit: 50,
+  });
   const [eventId, setEventId] = useState<string>("");
   const [date, setDate] = useState("");
   const [notes, setNotes] = useState("");
@@ -117,13 +122,33 @@ function ProposalForm({ onDone }: { onDone: () => void }) {
   return (
     <div className="rounded-xl border border-[#FEE500]/60 bg-[#FFFDF5] p-4 space-y-3">
       <div className="space-y-1.5">
+        <Label className="text-xs">카테고리</Label>
+        <div className="flex flex-wrap gap-1.5">
+          {CATEGORY_CHIPS.map((c) => (
+            <button
+              key={c.key}
+              type="button"
+              onClick={() => {
+                setCategory(c.key);
+                setEventId(""); // 카테고리 전환 시 선택 초기화
+              }}
+              className={`px-2.5 py-1 rounded-full text-xs border transition-colors ${
+                category === c.key ? "bg-black text-white border-black" : "border-border text-muted-foreground bg-white"
+              }`}
+            >
+              {c.emoji} {c.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="space-y-1.5">
         <Label className="text-xs">행사</Label>
         <select
           value={eventId}
           onChange={(e) => setEventId(e.target.value)}
           className="w-full rounded-md border border-border bg-white px-3 py-2 text-sm"
         >
-          <option value="">행사 선택</option>
+          <option value="">{events && events.length === 0 ? "이 카테고리에 행사가 없어요" : "행사 선택"}</option>
           {events?.map((e) => (
             <option key={e.id} value={e.id}>{e.title}</option>
           ))}
