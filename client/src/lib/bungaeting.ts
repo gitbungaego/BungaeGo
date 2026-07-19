@@ -3,7 +3,7 @@
 
 export const GENDER_MODE_LABELS: Record<string, string> = {
   any: "일반",
-  half: "반반",
+  half: "남녀 반반",
   female_only: "여성 전용",
   male_only: "남성 전용",
 };

@@ -118,3 +118,4 @@ temp/
 scripts/_tmp-*
 
 .vercel
+.claude/settings.local.json

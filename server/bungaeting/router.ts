@@ -141,6 +141,8 @@ export const bungaetingRouter = router({
           preferredAgeMin: z.number().int().min(0).max(120).nullable().optional(),
           preferredAgeMax: z.number().int().min(0).max(120).nullable().optional(),
           preferredRegion: z.string().max(100).nullable().optional(),
+          interestRegion: z.string().max(100).nullable().optional(),
+          preferredCategories: z.string().max(300).nullable().optional(),
           preferredTheme: z.string().max(100).nullable().optional(),
           smsOptIn: z.boolean(),
         })
@@ -158,6 +160,8 @@ export const bungaetingRouter = router({
           preferredAgeMin: input.preferredAgeMin ?? null,
           preferredAgeMax: input.preferredAgeMax ?? null,
           preferredRegion: input.preferredRegion ?? null,
+          interestRegion: input.interestRegion ?? null,
+          preferredCategories: input.preferredCategories ?? null,
           preferredTheme: input.preferredTheme ?? null,
           smsOptIn: input.smsOptIn,
         });

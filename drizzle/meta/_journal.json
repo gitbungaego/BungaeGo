@@ -211,6 +211,13 @@
       "when": 1784308243887,
       "tag": "0029_high_talkback",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "5",
+      "when": 1784459081880,
+      "tag": "0030_dazzling_nick_fury",
+      "breakpoints": true
     }
   ]
 }

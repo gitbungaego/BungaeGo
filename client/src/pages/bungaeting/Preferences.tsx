@@ -9,8 +9,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { GENDER_MODE_OPTIONS, GENDER_MODE_LABELS } from "@/lib/bungaeting";
+import { CATEGORY_CHIPS, REQUEST_EXTRA_CHIPS } from "@/lib/constants";
 
-// 선호 등록 (spec §2): 조건에 맞는 회차가 열리면 SMS 알림. 알림 채널은 mock(console.log).
+// 선호 카테고리 선택지 — 이벤트 만들기 신청과 동일한 카테고리 세트.
+const CATEGORY_OPTIONS = [...CATEGORY_CHIPS.filter((c) => c.key !== "all"), ...REQUEST_EXTRA_CHIPS];
+
+// 선호 등록 (spec §2): 조건에 맞는 회차가 열리면 카카오톡 알림. 알림 채널은 mock(console.log).
 export default function BungaetingPreferences() {
   const { isAuthenticated, loading } = useAuth();
   const [, navigate] = useLocation();
@@ -24,7 +28,9 @@ export default function BungaetingPreferences() {
   const [genderMode, setGenderMode] = useState<string>("");
   const [ageMin, setAgeMin] = useState<string>("");
   const [ageMax, setAgeMax] = useState<string>("");
-  const [region, setRegion] = useState("");
+  const [region, setRegion] = useState(""); // 거주지역 (preferredRegion)
+  const [interestRegion, setInterestRegion] = useState("");
+  const [categories, setCategories] = useState<string[]>([]);
   const [smsOptIn, setSmsOptIn] = useState(false);
 
   // 기존 선호값 로드.
@@ -34,9 +40,14 @@ export default function BungaetingPreferences() {
       setAgeMin(pref.preferredAgeMin != null ? String(pref.preferredAgeMin) : "");
       setAgeMax(pref.preferredAgeMax != null ? String(pref.preferredAgeMax) : "");
       setRegion(pref.preferredRegion ?? "");
+      setInterestRegion(pref.interestRegion ?? "");
+      setCategories(pref.preferredCategories ? pref.preferredCategories.split(",").filter(Boolean) : []);
       setSmsOptIn(pref.smsOptIn);
     }
   }, [pref]);
+
+  const toggleCategory = (key: string) =>
+    setCategories((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
 
   const upsert = trpc.bungaeting.preferences.upsert.useMutation({
     onSuccess: async () => {
@@ -110,14 +121,46 @@ export default function BungaetingPreferences() {
         </div>
 
         <div className="space-y-1.5">
-          <Label className="text-xs">관심 지역 (선택)</Label>
-          <Input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="예: 부산, 창원" />
+          <Label className="text-xs">거주지역</Label>
+          <Input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="예: 부산" />
         </div>
 
-        <label className="flex items-center justify-between pt-1 cursor-pointer">
-          <span className="text-sm">알림 받기 (SMS)</span>
-          <Switch checked={smsOptIn} onCheckedChange={setSmsOptIn} />
-        </label>
+        <div className="space-y-1.5">
+          <Label className="text-xs">관심 지역 (선택)</Label>
+          <Input
+            value={interestRegion}
+            onChange={(e) => setInterestRegion(e.target.value)}
+            placeholder="예: 서울, 창원"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label className="text-xs">선호 카테고리 (선택)</Label>
+          <div className="flex flex-wrap gap-1.5">
+            {CATEGORY_OPTIONS.map((c) => (
+              <button
+                key={c.key}
+                type="button"
+                onClick={() => toggleCategory(c.key)}
+                className={`px-3 py-1.5 rounded-full text-xs border transition-colors ${
+                  categories.includes(c.key)
+                    ? "bg-black text-white border-black"
+                    : "border-border text-muted-foreground"
+                }`}
+              >
+                {c.emoji} {c.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="pt-1 space-y-1">
+          <label className="flex items-center justify-between cursor-pointer">
+            <span className="text-sm">알림 받기 (카카오톡)</span>
+            <Switch checked={smsOptIn} onCheckedChange={setSmsOptIn} />
+          </label>
+          <p className="text-xs text-muted-foreground">선호하는 회차가 열리면 카카오톡으로 알림을 받을 수 있어요.</p>
+        </div>
       </section>
 
       <Button
@@ -129,6 +172,8 @@ export default function BungaetingPreferences() {
             preferredAgeMin: ageMin ? Number(ageMin) : null,
             preferredAgeMax: ageMax ? Number(ageMax) : null,
             preferredRegion: region.trim() || null,
+            interestRegion: interestRegion.trim() || null,
+            preferredCategories: categories.length ? categories.join(",") : null,
             smsOptIn,
           })
         }

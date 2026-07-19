@@ -675,6 +675,10 @@ export const bungaetingPreferences = mysqlTable(
     preferredAgeMin: int("preferredAgeMin"),
     preferredAgeMax: int("preferredAgeMax"),
     preferredRegion: varchar("preferredRegion", { length: 100 }),
+    // 관심 지역(선택) — preferredRegion은 UI에서 '거주지역'으로 재라벨링됨.
+    interestRegion: varchar("interestRegion", { length: 100 }),
+    // 선호 카테고리 — 이벤트 신청 카테고리 키의 쉼표 목록 (예: "concert,festival").
+    preferredCategories: varchar("preferredCategories", { length: 300 }),
     preferredTheme: varchar("preferredTheme", { length: 100 }),
     smsOptIn: boolean("smsOptIn").default(false).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
