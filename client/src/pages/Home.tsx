@@ -30,10 +30,6 @@ export default function Home() {
     <div className="pb-4">
       {/* 히어로 — 앱 첫 화면 인사 */}
       <section className="px-4 pt-5 pb-6 bg-gradient-to-b from-primary/10 via-yellow-50/40 to-transparent">
-        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-xs font-medium mb-3">
-          <Zap className="h-3 w-3 fill-current" />
-          번개처럼 빠른 이벤트 셔틀
-        </div>
         <h1 className="text-[22px] font-bold leading-snug tracking-tight">
           {isAuthenticated && user?.name ? (
             <>
