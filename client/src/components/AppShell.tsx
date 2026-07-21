@@ -14,24 +14,9 @@ import { Check, ChevronLeft, Globe, Home, PlusCircle, User } from "lucide-react"
 import { useLocale, useT } from "@/i18n";
 import { LOCALES } from "@/i18n/locales";
 
-// 번개GO 로고 색(노란 버스).
-const LOGO_YELLOW = "#F6B500";
-
-// 이벤트 탭 — 번개GO 로고에서 번개(⚡)만 뺀 버스 마크(눈·미소·다리 포함).
+// 번개셔틀 탭 — 번개GO 로고에서 번개(⚡)를 뺀 노란 버스 이미지.
 function EventBusIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
-      <rect x="4.5" y="3" width="15" height="16.5" rx="3.4" fill={LOGO_YELLOW} />
-      <rect x="4.5" y="10.7" width="15" height="1.1" fill="#fff" />
-      <circle cx="9" cy="14.4" r="1.3" fill="#fff" />
-      <circle cx="15" cy="14.4" r="1.3" fill="#fff" />
-      <path d="M9 16.5c1 1.25 5 1.25 6 0" stroke="#fff" strokeWidth="1.25" strokeLinecap="round" />
-      <rect x="7" y="19.3" width="1.7" height="2.3" rx="0.6" fill={LOGO_YELLOW} />
-      <rect x="9.1" y="19.3" width="1.7" height="2.3" rx="0.6" fill={LOGO_YELLOW} />
-      <rect x="13.2" y="19.3" width="1.7" height="2.3" rx="0.6" fill={LOGO_YELLOW} />
-      <rect x="15.3" y="19.3" width="1.7" height="2.3" rx="0.6" fill={LOGO_YELLOW} />
-    </svg>
-  );
+  return <img src="/bus.png" alt="" aria-hidden="true" className={`${className ?? ""} object-contain`} />;
 }
 
 // 번개팅 탭 — 원래 번개GO 로고(노란 버스 + 번개 표식) 이미지.

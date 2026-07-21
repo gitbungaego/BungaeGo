@@ -20,7 +20,7 @@ const STRINGS: Record<string, Row> = {
 
   // ── 상단바 / 하단탭 ──
   "nav.home": { ko: "홈", en: "Home", ja: "ホーム", zhCN: "首页", zhTW: "首頁" },
-  "nav.events": { ko: "이벤트", en: "Events", ja: "イベント", zhCN: "活动", zhTW: "活動" },
+  "nav.events": { ko: "번개셔틀", en: "Shuttle", ja: "シャトル", zhCN: "班车", zhTW: "接駁車" },
   "nav.create": { ko: "만들기", en: "Create", ja: "作成", zhCN: "创建", zhTW: "建立" },
   "nav.bungaeting": { ko: "번개팅", en: "Bungaeting", ja: "Bungaeting", zhCN: "Bungaeting", zhTW: "Bungaeting" },
   "nav.my": { ko: "마이", en: "My", ja: "マイ", zhCN: "我的", zhTW: "我的" },
