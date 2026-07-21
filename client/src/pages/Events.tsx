@@ -5,9 +5,11 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Bus, Search } from "lucide-react";
 import { CategoryIconChips, EventRow, MonthChips, filterAndSortEvents } from "@/components/EventBrowser";
+import { useT } from "@/i18n";
 
 // 이벤트 전체 보기 — 카카오T 셔틀 스타일 (카테고리 아이콘 칩 + 월별 필터 + 세로 포스터 리스트).
 export default function EventsPage() {
+  const t = useT();
   const [category, setCategory] = useState("all");
   const [monthKey, setMonthKey] = useState("popular");
   const [search, setSearch] = useState("");
@@ -35,18 +37,18 @@ export default function EventsPage() {
   return (
     <div className="py-5">
       <div className="container space-y-3">
-        <h1 className="text-lg font-bold">모집중인 셔틀</h1>
+        <h1 className="text-lg font-bold">{t("events.title")}</h1>
 
         <form onSubmit={handleSearch} className="relative">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="아티스트, 이벤트, 장소 검색"
+            placeholder={t("events.searchPlaceholder")}
             className="pl-10 pr-20 h-11 rounded-xl border-border/80"
           />
           <Button type="submit" size="sm" className="absolute right-1.5 top-1/2 -translate-y-1/2 h-8 px-3">
-            검색
+            {t("events.search")}
           </Button>
         </form>
 
@@ -77,11 +79,11 @@ export default function EventsPage() {
             <Bus className="h-12 w-12 mx-auto mb-4 opacity-20" />
             {search ? (
               <>
-                <p className="font-medium">'{search}'에 대한 결과가 없어요</p>
-                <p className="text-sm mt-1">한글·영문 표기를 바꿔 검색해보세요</p>
+                <p className="font-medium">{t("events.noResult", { q: search })}</p>
+                <p className="text-sm mt-1">{t("events.noResultHint")}</p>
               </>
             ) : (
-              <p className="font-medium">해당 조건의 셔틀이 아직 없어요</p>
+              <p className="font-medium">{t("events.emptyFilter")}</p>
             )}
             {(search || category !== "all" || monthKey !== "popular") && (
               <Button
@@ -95,7 +97,7 @@ export default function EventsPage() {
                   setMonthKey("popular");
                 }}
               >
-                필터 초기화
+                {t("events.resetFilter")}
               </Button>
             )}
           </div>

@@ -31,6 +31,7 @@ import { MapView, centerMapOn, createArrivalMarker, createBoardingPointMarker } 
 import { FRAME_FIXED } from "@/components/AppShell";
 import { isTossConfigured } from "@/lib/toss";
 import { useTossPayment } from "@/hooks/useTossPayment";
+import { useLocale, useT } from "@/i18n";
 
 interface Props {
   tripId: number;
@@ -41,87 +42,52 @@ interface Props {
 // CTA 이후는 기존 예약자 정보 → 결제 단계가 이어진다.
 type Phase = "config" | "info" | "pay";
 
-const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
-
-function chipDateLabel(date: Date | string) {
+// YY.MM.DD(요일)/MM.DD(요일) — 요일만 로케일화(intlTag).
+function chipDateLabel(date: Date | string, intlTag: string) {
   const d = new Date(date);
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
-  return `${mm}.${dd}(${WEEKDAYS[d.getDay()]})`;
+  const wd = d.toLocaleDateString(intlTag, { weekday: "short" });
+  return `${mm}.${dd}(${wd})`;
 }
 
-function rangeDateLabel(date: Date | string) {
+function rangeDateLabel(date: Date | string, intlTag: string) {
   const d = new Date(date);
   const yy = String(d.getFullYear()).slice(2);
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
-  return `${yy}.${mm}.${dd}(${WEEKDAYS[d.getDay()]})`;
+  const wd = d.toLocaleDateString(intlTag, { weekday: "short" });
+  return `${yy}.${mm}.${dd}(${wd})`;
 }
 
-// 유의사항 탭 콘텐츠 — 카카오T 구성을 참고하되 내용은 번개GO 실제 정책(D-5 확정,
-// QR 탑승권, 옵션 변경 불가)과 일치시킨다.
+// 유의사항 탭 콘텐츠 — 아이콘 + catalog 키. 실제 정책(D-5 확정, QR 탑승권, 옵션 변경 불가)과 일치.
 const NOTICE_RESERVE = [
-  {
-    icon: CalendarCheck,
-    title: "탑승 5일 전 운행이 확정돼요",
-    desc: "최소 인원 미달 시 자동 취소 및 전액 환불됩니다.",
-    highlight: true,
-  },
-  {
-    icon: Smile,
-    title: "행사가 늦어져도 괜찮아요",
-    desc: "행사가 지연되어 현장 변동사항이 있을 경우, 안내 문자를 보내드립니다.",
-  },
-  {
-    icon: Users,
-    title: "예약자 본인만 탑승권이 발급돼요",
-    desc: "2인 이상 예약 시 예약자에게만 탑승권(QR)이 발급됩니다. 일행과 함께 탑승해주세요.",
-  },
-  {
-    icon: AlertTriangle,
-    title: "예약 완료 후 옵션은 변경할 수 없어요",
-    desc: "탑승 장소·시간·인원 수 등 옵션 변경은 불가하며, 취소 후 다시 예약하셔야 합니다.",
-  },
+  { icon: CalendarCheck, titleKey: "nr1.title", descKey: "nr1.desc", highlight: true },
+  { icon: Smile, titleKey: "nr2.title", descKey: "nr2.desc" },
+  { icon: Users, titleKey: "nr3.title", descKey: "nr3.desc" },
+  { icon: AlertTriangle, titleKey: "nr4.title", descKey: "nr4.desc" },
 ];
 
 const NOTICE_BOARD = [
-  {
-    icon: Smartphone,
-    title: "모바일 탑승권을 꼭 준비해주세요",
-    desc: "예약자 본인이 직접 탑승권(QR)을 보여주셔야 하며, 캡처·녹화된 탑승권은 이용 불가합니다.",
-  },
-  {
-    icon: Bus,
-    title: "차량 전면의 도착지 정보를 확인해주세요",
-    desc: "버스 전면 안내판이나 탑승 장소의 팻말을 확인 후 탑승해주세요.",
-  },
-  {
-    icon: AlarmClock,
-    title: "출발 15분 전 대기, 5분 전 탑승하세요",
-    desc: "자유석 탑승이며, 차량 만차 시 순차적으로 출발해요.",
-  },
-  {
-    icon: Smile,
-    title: "쾌적한 이용을 위해 지켜주세요",
-    desc: "차량 오염·파손으로 이용에 지장을 줄 경우 손해배용 청구 및 탑승 제한이 있을 수 있어요.",
-  },
-  {
-    icon: AlertTriangle,
-    title: "탑승 중 사고 및 분실에 유의하세요",
-    desc: "사고·도난 등 본인 부주의에 대한 책임은 본인에게 있습니다.",
-  },
+  { icon: Smartphone, titleKey: "nb1.title", descKey: "nb1.desc" },
+  { icon: Bus, titleKey: "nb2.title", descKey: "nb2.desc" },
+  { icon: AlarmClock, titleKey: "nb3.title", descKey: "nb3.desc" },
+  { icon: Smile, titleKey: "nb4.title", descKey: "nb4.desc" },
+  { icon: AlertTriangle, titleKey: "nb5.title", descKey: "nb5.desc" },
 ];
 
-// shared/cancellationPolicy.ts의 실제 수수료 스케줄과 1:1.
+// shared/cancellationPolicy.ts의 실제 수수료 스케줄과 1:1. danger = 환불 불가 강조.
 const CANCEL_ROWS = [
-  { period: "~ 탑승 8일 전 23:59", fee: "없음" },
-  { period: "탑승 7일 전 23:59까지", fee: "결제 금액의 25%" },
-  { period: "탑승 6일 전 23:59까지", fee: "결제 금액의 50%" },
-  { period: "탑승 5일 전 00:00 ~", fee: "취소/환불 불가" },
+  { periodKey: "cr1.period", feeKey: "cr1.fee" },
+  { periodKey: "cr2.period", feeKey: "cr2.fee" },
+  { periodKey: "cr3.period", feeKey: "cr3.fee" },
+  { periodKey: "cr4.period", feeKey: "cr4.fee", danger: true },
 ];
 
 export default function BookingPage({ tripId }: Props) {
   const { user, isAuthenticated } = useAuth();
+  const t = useT();
+  const { intlTag } = useLocale();
   const [, navigate] = useLocation();
   const [phase, setPhase] = useState<Phase>("config");
 
@@ -175,21 +141,21 @@ export default function BookingPage({ tripId }: Props) {
 
   // 날짜 칩 = 이 이벤트의 회차들(취소 제외). 같은 날 두 회차가 있으면 시간을 붙여 구분.
   const dateChips = useMemo(() => {
-    const list = (siblingTrips ?? []).filter((t) => t.status !== "cancelled");
+    const list = (siblingTrips ?? []).filter((st) => st.status !== "cancelled");
     const dayCount = new Map<string, number>();
-    list.forEach((t) => {
-      const key = chipDateLabel(t.departureAt);
+    list.forEach((st) => {
+      const key = chipDateLabel(st.departureAt, intlTag);
       dayCount.set(key, (dayCount.get(key) ?? 0) + 1);
     });
-    return list.map((t) => {
-      const day = chipDateLabel(t.departureAt);
+    return list.map((st) => {
+      const day = chipDateLabel(st.departureAt, intlTag);
       return {
-        trip: t,
-        label: (dayCount.get(day) ?? 0) > 1 ? `${day} ${formatTime(t.departureAt)}` : day,
-        soldOut: t.availability.remaining <= 0,
+        trip: st,
+        label: (dayCount.get(day) ?? 0) > 1 ? `${day} ${formatTime(st.departureAt)}` : day,
+        soldOut: st.availability.remaining <= 0,
       };
     });
-  }, [siblingTrips]);
+  }, [siblingTrips, intlTag]);
 
   const tripPoints = useMemo(
     () => (allPoints ?? []).filter((bp) => bp.tripId === selectedTripId),
@@ -247,13 +213,13 @@ export default function BookingPage({ tripId }: Props) {
 
   const createReservation = trpc.reservations.create.useMutation({
     onSuccess: (data) => {
-      toast.success("예약이 완료되었습니다!");
+      toast.success(t("bookingConfirm.done"));
       navigate(`/reservations/${data.id}/confirm`);
     },
-    onError: (err) => toast.error(err.message || "예약에 실패했습니다."),
+    onError: (err) => toast.error(err.message || t("booking.failReserve")),
   });
   const createTossOrder = trpc.payments.createTossOrder.useMutation({
-    onError: (err) => toast.error(err.message || "주문 생성에 실패했습니다."),
+    onError: (err) => toast.error(err.message || t("booking.failOrder")),
   });
 
   // 훅 순서상 가드보다 먼저 필요 — 아래 unitPrice와 동일한 규칙으로 계산.
@@ -271,9 +237,9 @@ export default function BookingPage({ tripId }: Props) {
   if (!isAuthenticated) {
     return (
       <div className="py-20 text-center space-y-4">
-        <p className="text-muted-foreground">예약하려면 로그인이 필요합니다.</p>
+        <p className="text-muted-foreground">{t("booking.loginNeeded")}</p>
         <Button asChild className="bg-[#FEE500] hover:bg-[#FDD800] text-black">
-          <a href={getLoginUrl()}>카카오로 로그인</a>
+          <a href={getLoginUrl()}>{t("booking.kakaoLogin")}</a>
         </Button>
       </div>
     );
@@ -289,11 +255,11 @@ export default function BookingPage({ tripId }: Props) {
         </div>
       );
     }
-    return <div className="py-20 text-center text-muted-foreground">셔틀을 찾을 수 없습니다.</div>;
+    return <div className="py-20 text-center text-muted-foreground">{t("booking.notFound")}</div>;
   }
 
   if (!trip) {
-    return <div className="py-20 text-center text-muted-foreground">셔틀을 찾을 수 없습니다.</div>;
+    return <div className="py-20 text-center text-muted-foreground">{t("booking.notFound")}</div>;
   }
 
   const remaining = trip.availability.remaining;
@@ -305,15 +271,15 @@ export default function BookingPage({ tripId }: Props) {
   const ticketOptions: { key: "round" | "outbound" | "inbound"; label: string; desc: string; price: number }[] =
     trip.isRoundTrip
       ? [
-          { key: "round", label: "왕복", desc: "행사장 갈 때 · 올 때 모두 탑승", price: trip.price },
+          { key: "round", label: t("ticket.round"), desc: t("ticket.roundDesc"), price: trip.price },
           ...(trip.oneWayPrice != null
             ? ([
-                { key: "outbound", label: "행사장행", desc: "행사장 가는 편만 탑승", price: trip.oneWayPrice },
-                { key: "inbound", label: "귀가행", desc: "행사장에서 돌아오는 편만 탑승", price: trip.oneWayPrice },
+                { key: "outbound", label: t("ticket.outbound"), desc: t("ticket.outboundDesc"), price: trip.oneWayPrice },
+                { key: "inbound", label: t("ticket.inbound"), desc: t("ticket.inboundDesc"), price: trip.oneWayPrice },
               ] as const)
             : []),
         ]
-      : [{ key: "round", label: "행사장행", desc: "행사장 가는 편도 셔틀", price: trip.price }];
+      : [{ key: "round", label: t("ticket.outbound"), desc: t("ticket.onewayDesc"), price: trip.price }];
   // 선택한 종류가 선택지에서 사라진 경우(예: 관리자가 편도가 해제) 왕복으로 폴백.
   const selectedTicket = ticketOptions.find((o) => o.key === ticketType) ?? ticketOptions[0];
   const unitPrice = selectedTicket.price;
@@ -328,7 +294,7 @@ export default function BookingPage({ tripId }: Props) {
 
   const handleSubmit = async () => {
     if (!passengerName || !passengerPhone) {
-      toast.error("예약자 정보를 입력해주세요.");
+      toast.error(t("booking.enterPassenger"));
       return;
     }
     if (trimmedCode && codeCheck && !codeCheck.ok) {
@@ -381,56 +347,56 @@ export default function BookingPage({ tripId }: Props) {
           className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground mb-5 transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
-          이전으로
+          {t("booking.back")}
         </button>
 
         {/* 선택 요약 */}
         <div className="rounded-2xl border border-border bg-card p-4 mb-5 text-sm space-y-1.5">
-          <p className="font-semibold">{event?.title ?? "셔틀 예약"}</p>
+          <p className="font-semibold">{event?.title ?? t("title.booking")}</p>
           <p className="text-muted-foreground">
-            {rangeDateLabel(trip.departureAt)} {formatTime(trip.departureAt)} 출발 · {selectedTicket.label} · {seats}명
+            {rangeDateLabel(trip.departureAt, intlTag)} {formatTime(trip.departureAt)} · {selectedTicket.label} · {t("common.seats", { n: seats })}
           </p>
           <p className="text-muted-foreground flex items-center gap-1">
             <MapPin className="h-3.5 w-3.5" />
-            {selectedBp ? selectedBp.name : "탑승지 미지정"} → {event?.venue}
+            {selectedBp ? selectedBp.name : t("booking.tripUnset")} → {event?.venue}
           </p>
         </div>
 
         {phase === "info" ? (
           <div className="rounded-2xl border border-border bg-card p-5 space-y-4">
-            <h2 className="text-lg font-semibold">예약자 정보</h2>
+            <h2 className="text-lg font-semibold">{t("booking.passengerInfo")}</h2>
             <div className="space-y-3">
               <div className="space-y-1.5">
-                <Label htmlFor="name">이름 *</Label>
-                <Input id="name" value={passengerName} onChange={(e) => setPassengerName(e.target.value)} placeholder="홍길동" />
+                <Label htmlFor="name">{t("booking.name")}</Label>
+                <Input id="name" value={passengerName} onChange={(e) => setPassengerName(e.target.value)} placeholder={t("booking.namePh")} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="phone">연락처 *</Label>
+                <Label htmlFor="phone">{t("booking.phone")}</Label>
                 <Input id="phone" value={passengerPhone} onChange={(e) => setPassengerPhone(e.target.value)} placeholder="010-0000-0000" type="tel" />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="email">이메일 (선택)</Label>
+                <Label htmlFor="email">{t("booking.email")}</Label>
                 <Input id="email" value={passengerEmail} onChange={(e) => setPassengerEmail(e.target.value)} placeholder="example@email.com" type="email" />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="referral">추천 코드 (선택)</Label>
+                <Label htmlFor="referral">{t("booking.referral")}</Label>
                 <Input
                   id="referral"
                   value={referralCode}
                   onChange={(e) => setReferralCode(e.target.value.toUpperCase())}
-                  placeholder="친구의 추천 코드 입력"
+                  placeholder={t("booking.referralPh")}
                   maxLength={16}
                   className="uppercase"
                 />
                 {trimmedCode.length >= 4 && codeCheck ? (
                   codeCheck.ok ? (
-                    <p className="text-xs text-emerald-600">사용 가능한 코드예요.</p>
+                    <p className="text-xs text-emerald-600">{t("booking.codeOk")}</p>
                   ) : (
                     <p className="text-xs text-destructive">{codeCheck.reason}</p>
                   )
                 ) : (
                   <p className="text-xs text-muted-foreground">
-                    셔틀 운행이 완료되면 코드 주인에게 실결제액의 2~5% (최대 5,000P)가 적립돼요.
+                    {t("booking.codeHint")}
                   </p>
                 )}
               </div>
@@ -440,41 +406,41 @@ export default function BookingPage({ tripId }: Props) {
               disabled={!passengerName || !passengerPhone}
               onClick={() => setPhase("pay")}
             >
-              다음
+              {t("common.next")}
             </Button>
           </div>
         ) : (
           <div className="rounded-2xl border border-border bg-card p-5 space-y-5">
-            <h2 className="text-lg font-semibold">결제</h2>
+            <h2 className="text-lg font-semibold">{t("booking.payment")}</h2>
 
             <div className="space-y-3 text-sm">
               <div className="flex justify-between">
-                <span className="text-muted-foreground">탑승 장소</span>
-                <span className="font-medium">{selectedBp ? selectedBp.name : "미지정"}</span>
+                <span className="text-muted-foreground">{t("field.boardingPlace")}</span>
+                <span className="font-medium">{selectedBp ? selectedBp.name : t("booking.unset")}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">탑승권</span>
+                <span className="text-muted-foreground">{t("field.ticket")}</span>
                 <span className="font-medium">{selectedTicket.label}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">예약 인원</span>
-                <span className="font-medium">{seats}명</span>
+                <span className="text-muted-foreground">{t("field.riders")}</span>
+                <span className="font-medium">{t("common.seats", { n: seats })}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">예약자</span>
+                <span className="text-muted-foreground">{t("field.passenger")}</span>
                 <span className="font-medium">{passengerName}</span>
               </div>
               <Separator />
               <div className="flex justify-between">
-                <span className="text-muted-foreground">운임 × {seats}</span>
+                <span className="text-muted-foreground">{t("booking.fare", { n: seats })}</span>
                 <span>{formatPrice(totalBeforePoints)}</span>
               </div>
 
               {(pointsBalance?.balance ?? 0) > 0 && (
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">포인트 사용</span>
-                    <span className="text-xs text-muted-foreground">보유 {(pointsBalance?.balance ?? 0).toLocaleString()}P</span>
+                    <span className="text-muted-foreground">{t("booking.pointsUse")}</span>
+                    <span className="text-xs text-muted-foreground">{t("booking.pointsHave", { n: (pointsBalance?.balance ?? 0).toLocaleString() })}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Input
@@ -486,12 +452,12 @@ export default function BookingPage({ tripId }: Props) {
                       className="h-8 text-sm"
                     />
                     <Button variant="outline" size="sm" onClick={() => setPointsUsed(maxPointsUsable)} className="whitespace-nowrap">
-                      전액 사용
+                      {t("booking.useAll")}
                     </Button>
                   </div>
                   {pointsUsed > 0 && (
                     <div className="flex justify-between text-emerald-600">
-                      <span>포인트 할인</span>
+                      <span>{t("booking.pointsDiscount")}</span>
                       <span>-{formatPrice(pointsUsed)}</span>
                     </div>
                   )}
@@ -500,14 +466,14 @@ export default function BookingPage({ tripId }: Props) {
 
               <Separator />
               <div className="flex justify-between text-base font-bold">
-                <span>최종 결제 금액</span>
+                <span>{t("booking.finalAmount")}</span>
                 <span className="text-primary">{formatPrice(totalAmount)}</span>
               </div>
             </div>
 
             {tossAvailable && (
               <div className="space-y-2">
-                <p className="text-sm font-medium">결제 수단</p>
+                <p className="text-sm font-medium">{t("booking.payMethod")}</p>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
@@ -516,7 +482,7 @@ export default function BookingPage({ tripId }: Props) {
                       payMethod === "toss" ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
                     }`}
                   >
-                    토스페이먼츠
+                    {t("booking.tossPay")}
                   </button>
                   <button
                     type="button"
@@ -525,7 +491,7 @@ export default function BookingPage({ tripId }: Props) {
                       payMethod === "mock" ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
                     }`}
                   >
-                    데모 결제
+                    {t("booking.demoPay")}
                   </button>
                 </div>
               </div>
@@ -539,7 +505,7 @@ export default function BookingPage({ tripId }: Props) {
               </div>
             ) : (
               <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-700">
-                ※ 데모 환경입니다. 실제 결제는 이루어지지 않습니다.
+                {t("booking.demoNote")}
               </div>
             )}
 
@@ -550,12 +516,12 @@ export default function BookingPage({ tripId }: Props) {
             >
               {createReservation.isPending || tossSubmitting ? (
                 <span className="inline-flex items-center gap-2">
-                  <Loader2 className="h-4 w-4 animate-spin" /> 처리 중...
+                  <Loader2 className="h-4 w-4 animate-spin" /> {t("booking.processing")}
                 </span>
               ) : payMethod === "toss" && !toss.ready ? (
-                "결제수단 불러오는 중..."
+                t("booking.loadingPay")
               ) : (
-                `${formatPrice(totalAmount)} 결제하기`
+                `${formatPrice(totalAmount)} ${t("booking.pay")}`
               )}
             </Button>
           </div>
@@ -581,7 +547,7 @@ export default function BookingPage({ tripId }: Props) {
               )}
             </div>
             <div className="min-w-0 space-y-0.5">
-              <p className="font-bold truncate">{event?.title ?? "셔틀 예약"}</p>
+              <p className="font-bold truncate">{event?.title ?? t("title.booking")}</p>
               <p className="text-xs text-muted-foreground flex items-center gap-1">
                 <MapPin className="h-3 w-3 flex-shrink-0" />
                 <span className="truncate">{event?.venue}</span>
@@ -589,12 +555,12 @@ export default function BookingPage({ tripId }: Props) {
               {event && (
                 <p className="text-xs text-muted-foreground flex items-center gap-1">
                   <CalendarCheck className="h-3 w-3 flex-shrink-0" />
-                  {rangeDateLabel(event.eventDate)}
+                  {rangeDateLabel(event.eventDate, intlTag)}
                 </p>
               )}
               <p className="text-xs text-muted-foreground flex items-center gap-1">
                 <Bus className="h-3 w-3 flex-shrink-0" />
-                {trip.mode === "bus" ? "일반버스" : "밴"} {trip.maxCount}인승
+                {trip.mode === "bus" ? t("booking.busType") : t("booking.vanType")} {t("booking.capacity", { n: trip.maxCount })}
               </p>
             </div>
           </div>
@@ -604,7 +570,7 @@ export default function BookingPage({ tripId }: Props) {
       <div className="container max-w-2xl space-y-7 pt-5">
         {/* 이용 지역 */}
         <section className="space-y-2">
-          <h2 className="font-bold">이용 지역</h2>
+          <h2 className="font-bold">{t("booking.useRegion")}</h2>
           <button
             type="button"
             onClick={() => setRegionSheetOpen(true)}
@@ -613,11 +579,11 @@ export default function BookingPage({ tripId }: Props) {
             <span className="flex items-center gap-2 min-w-0">
               <MapPin className="h-4 w-4 text-muted-foreground flex-shrink-0" />
               <span className="text-sm font-medium truncate">
-                {selectedBp ? selectedBp.name : "탑승 장소를 선택해 주세요"}
+                {selectedBp ? selectedBp.name : t("booking.selectBoardingPlace")}
               </span>
             </span>
             <span className="flex items-center gap-0.5 text-sm text-muted-foreground flex-shrink-0">
-              변경 <ChevronRight className="h-4 w-4" />
+              {t("common.change")} <ChevronRight className="h-4 w-4" />
             </span>
           </button>
         </section>
@@ -625,8 +591,8 @@ export default function BookingPage({ tripId }: Props) {
         {/* 예약 인원 */}
         <section className="space-y-2">
           <div className="flex items-baseline gap-2">
-            <h2 className="font-bold">예약 인원</h2>
-            <span className="text-xs text-muted-foreground">최대 {maxSeats}명 예약 가능</span>
+            <h2 className="font-bold">{t("field.riders")}</h2>
+            <span className="text-xs text-muted-foreground">{t("booking.maxRiders", { n: maxSeats })}</span>
           </div>
           <div className="flex gap-1.5 overflow-x-auto scrollbar-none -mx-4 px-4 pb-1">
             {Array.from({ length: maxSeats }, (_, i) => i + 1).map((n) => (
@@ -638,7 +604,7 @@ export default function BookingPage({ tripId }: Props) {
                   seats === n ? "border-primary bg-primary/10 text-foreground font-bold" : "border-border text-muted-foreground"
                 }`}
               >
-                {n}명
+                {t("common.seats", { n })}
               </button>
             ))}
           </div>
@@ -646,17 +612,17 @@ export default function BookingPage({ tripId }: Props) {
 
         {/* 날짜 선택 */}
         <section className="space-y-2">
-          <h2 className="font-bold">날짜 선택</h2>
+          <h2 className="font-bold">{t("booking.selectDate")}</h2>
           {dateChips.length > 0 ? (
             <div className="flex gap-1.5 overflow-x-auto scrollbar-none -mx-4 px-4 pb-1">
-              {dateChips.map(({ trip: t, label, soldOut: chipSoldOut }) => (
+              {dateChips.map(({ trip: st, label, soldOut: chipSoldOut }) => (
                 <button
-                  key={t.id}
+                  key={st.id}
                   type="button"
                   disabled={chipSoldOut}
-                  onClick={() => switchTrip(t.id)}
+                  onClick={() => switchTrip(st.id)}
                   className={`flex-shrink-0 px-3.5 py-2 rounded-lg border text-sm font-medium transition-all disabled:opacity-40 ${
-                    selectedTripId === t.id
+                    selectedTripId === st.id
                       ? "border-primary bg-primary/10 text-foreground font-bold"
                       : "border-border text-muted-foreground"
                   }`}
@@ -666,14 +632,14 @@ export default function BookingPage({ tripId }: Props) {
               ))}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">예약 가능한 날짜가 없습니다.</p>
+            <p className="text-sm text-muted-foreground">{t("booking.noDates")}</p>
           )}
-          <p className="text-xs text-muted-foreground">{formatTime(trip.departureAt)} 출발</p>
+          <p className="text-xs text-muted-foreground">{t("eventDetail.depart", { time: formatTime(trip.departureAt) })}</p>
         </section>
 
         {/* 탑승권 선택 — 왕복 / 행사장행 / 귀가행 */}
         <section className="space-y-2">
-          <h2 className="font-bold">탑승권 선택</h2>
+          <h2 className="font-bold">{t("booking.selectTicket")}</h2>
           <div className="space-y-1.5">
             {ticketOptions.map((o) => {
               const isSelected = selectedTicket.key === o.key;
@@ -710,9 +676,9 @@ export default function BookingPage({ tripId }: Props) {
 
         {/* 탑승/하차 위치 */}
         <section className="space-y-3">
-          <h2 className="font-bold">탑승/하차 위치</h2>
+          <h2 className="font-bold">{t("booking.boardDropLoc")}</h2>
           <div className="grid grid-cols-2 gap-1 rounded-full bg-muted p-1">
-            {([["board", "탑승 장소"], ["drop", "하차 장소"]] as const).map(([key, label]) => (
+            {([["board", t("field.boardingPlace")], ["drop", t("booking.dropPlace")]] as const).map(([key, label]) => (
               <button
                 key={key}
                 type="button"
@@ -734,7 +700,7 @@ export default function BookingPage({ tripId }: Props) {
                   <>
                     <p className="font-semibold text-sm">{selectedBp.name}</p>
                     {selectedBp.pickupTime && (
-                      <p className="text-xs text-primary">픽업 {formatTime(selectedBp.pickupTime)}</p>
+                      <p className="text-xs text-primary">{t("eventDetail.pickup", { time: formatTime(selectedBp.pickupTime) })}</p>
                     )}
                     {selectedBp.address && (
                       <p className="text-xs text-muted-foreground flex items-center gap-1">
@@ -749,18 +715,18 @@ export default function BookingPage({ tripId }: Props) {
                         rel="noopener"
                         className="inline-flex items-center gap-1.5 text-xs font-medium text-black bg-[#FEE500] rounded-full px-3 py-1.5 mt-1"
                       >
-                        <Navigation className="h-3 w-3" /> 카카오맵으로 길찾기
+                        <Navigation className="h-3 w-3" /> {t("booking.kakaoMap")}
                       </a>
                     )}
                   </>
                 ) : (
-                  <p className="text-sm text-muted-foreground">탑승 장소 정보가 준비 중입니다.</p>
+                  <p className="text-sm text-muted-foreground">{t("booking.boardInfoPending")}</p>
                 )
               ) : (
                 <>
                   <p className="font-semibold text-sm">{event?.venue}</p>
                   <p className="text-xs text-muted-foreground">
-                    현장 사정에 따라 하차 위치가 변경될 수 있으며, 변경 시 문자로 안내드립니다.
+                    {t("booking.dropNote")}
                   </p>
                   {event?.address && (
                     <p className="text-xs text-muted-foreground flex items-center gap-1">
@@ -775,7 +741,7 @@ export default function BookingPage({ tripId }: Props) {
                       rel="noopener"
                       className="inline-flex items-center gap-1.5 text-xs font-medium text-black bg-[#FEE500] rounded-full px-3 py-1.5 mt-1"
                     >
-                      <Navigation className="h-3 w-3" /> 카카오맵으로 길찾기
+                      <Navigation className="h-3 w-3" /> {t("booking.kakaoMap")}
                     </a>
                   )}
                 </>
@@ -786,9 +752,9 @@ export default function BookingPage({ tripId }: Props) {
 
         {/* 유의사항 */}
         <section className="space-y-3">
-          <h2 className="font-bold">유의사항을 꼭 확인하세요!</h2>
+          <h2 className="font-bold">{t("booking.noticeTitle")}</h2>
           <div className="grid grid-cols-2 gap-1 rounded-full bg-muted p-1">
-            {([["reserve", "예약"], ["board", "탑승"]] as const).map(([key, label]) => (
+            {([["reserve", t("booking.noticeReserve")], ["board", t("booking.noticeBoard")]] as const).map(([key, label]) => (
               <button
                 key={key}
                 type="button"
@@ -803,13 +769,13 @@ export default function BookingPage({ tripId }: Props) {
           </div>
           <div className="space-y-4 pt-1">
             {(noticeTab === "reserve" ? NOTICE_RESERVE : NOTICE_BOARD).map((n) => (
-              <div key={n.title} className="flex gap-3">
+              <div key={n.titleKey} className="flex gap-3">
                 <div className="h-9 w-9 rounded-full bg-muted flex items-center justify-center flex-shrink-0">
                   <n.icon className="h-4 w-4 text-muted-foreground" />
                 </div>
                 <div className="min-w-0">
-                  <p className={`text-sm font-semibold ${"highlight" in n && n.highlight ? "text-primary" : ""}`}>{n.title}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{n.desc}</p>
+                  <p className={`text-sm font-semibold ${"highlight" in n && n.highlight ? "text-primary" : ""}`}>{t(n.titleKey)}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{t(n.descKey)}</p>
                 </div>
               </div>
             ))}
@@ -818,20 +784,20 @@ export default function BookingPage({ tripId }: Props) {
 
         {/* 취소 정책 */}
         <section className="space-y-2">
-          <h2 className="font-bold">취소 정책</h2>
+          <h2 className="font-bold">{t("booking.cancelPolicy")}</h2>
           <p className="text-xs text-muted-foreground">
-            예약 후 <span className="font-semibold text-foreground">1시간 이내에는 무료 취소</span> 가능합니다.
-            {isRushCreatedTrip && " (이 셔틀은 예약 후 1시간이 지나면 취소가 불가합니다.)"}
+            {t("booking.cancelNote")}
+            {isRushCreatedTrip && t("booking.rushNote")}
           </p>
           <div className="rounded-xl border border-border overflow-hidden text-sm">
             <div className="grid grid-cols-2 bg-muted/60 px-4 py-2.5 text-xs font-semibold text-muted-foreground">
-              <span>기간</span>
-              <span>취소 수수료</span>
+              <span>{t("booking.colPeriod")}</span>
+              <span>{t("booking.colFee")}</span>
             </div>
             {CANCEL_ROWS.map((row) => (
-              <div key={row.period} className="grid grid-cols-2 px-4 py-2.5 border-t border-border/60 text-xs">
-                <span className="text-muted-foreground">{row.period}</span>
-                <span className={row.fee === "취소/환불 불가" ? "text-destructive font-medium" : ""}>{row.fee}</span>
+              <div key={row.periodKey} className="grid grid-cols-2 px-4 py-2.5 border-t border-border/60 text-xs">
+                <span className="text-muted-foreground">{t(row.periodKey)}</span>
+                <span className={"danger" in row && row.danger ? "text-destructive font-medium" : ""}>{t(row.feeKey)}</span>
               </div>
             ))}
           </div>
@@ -839,42 +805,42 @@ export default function BookingPage({ tripId }: Props) {
 
         {/* 고객센터 */}
         <section className="space-y-2">
-          <h2 className="font-bold">번개GO 고객센터</h2>
-          <p className="text-xs text-muted-foreground">운행 관련 문의와 예약 관련 문의는 고객센터로 문의바랍니다.</p>
-          <p className="text-xs text-muted-foreground">운영시간: (평일 09:00 ~ 18:00)</p>
+          <h2 className="font-bold">{t("booking.custCenter")}</h2>
+          <p className="text-xs text-muted-foreground">{t("booking.custDesc")}</p>
+          <p className="text-xs text-muted-foreground">{t("booking.custHours")}</p>
           <Button variant="outline" className="w-full" asChild>
             <a href={KAKAO_CHANNEL_CHAT_URL} target="_blank" rel="noopener">
-              카카오톡 채널로 문의하기
+              {t("booking.kakaoChannel")}
             </a>
           </Button>
         </section>
 
         {/* 하단 유의사항 (텍스트) */}
         <section className="rounded-xl bg-muted/40 p-4 space-y-3 text-[11px] leading-relaxed text-muted-foreground">
-          <p className="font-semibold text-xs text-foreground/70">유의사항</p>
+          <p className="font-semibold text-xs text-foreground/70">{t("booking.notice")}</p>
           <div>
-            <p className="font-semibold">[예약 / 결제]</p>
+            <p className="font-semibold">{t("booking.headPay")}</p>
             <ul className="list-disc pl-4 space-y-0.5 mt-1">
-              <li>만석 또는 운행 취소 노선은 예약이 제한되며, 잔여 좌석만 예약 가능</li>
-              <li>예약 완료 후 변경은 취소 후 재예약으로만 가능</li>
-              <li>최소 인원 미달 시 자동 취소 및 전액 환불</li>
-              <li>현장 구매 불가 / 사전 예약 필수</li>
+              <li>{t("np1")}</li>
+              <li>{t("np2")}</li>
+              <li>{t("np3")}</li>
+              <li>{t("np4")}</li>
             </ul>
           </div>
           <div>
-            <p className="font-semibold">[탑승 안내]</p>
+            <p className="font-semibold">{t("booking.headBoard")}</p>
             <ul className="list-disc pl-4 space-y-0.5 mt-1">
-              <li>공연 지연 시 셔틀 출발도 함께 지연되며, 문자로 안내</li>
-              <li>미성년자는 보호자 동반 탑승을 권장하며 단독 탑승 시 책임은 보호자에게 귀속</li>
-              <li>안전한 승하차를 위해 출·도착지가 변경될 수 있으며, 이 경우 문자로 안내</li>
-              <li>교통 상황에 따라 운행 시간이 변동될 수 있음</li>
+              <li>{t("nbd1")}</li>
+              <li>{t("nbd2")}</li>
+              <li>{t("nbd3")}</li>
+              <li>{t("nbd4")}</li>
             </ul>
           </div>
           <div>
-            <p className="font-semibold">[기타]</p>
+            <p className="font-semibold">{t("booking.headEtc")}</p>
             <ul className="list-disc pl-4 space-y-0.5 mt-1">
-              <li>차량 내 음식물 섭취 제한</li>
-              <li>지나친 음주자 또는 타인에게 불편을 주는 경우 탑승 제한</li>
+              <li>{t("ne1")}</li>
+              <li>{t("ne2")}</li>
             </ul>
           </div>
         </section>
@@ -888,7 +854,7 @@ export default function BookingPage({ tripId }: Props) {
           disabled={soldOut}
           onClick={() => setPhase("info")}
         >
-          {soldOut ? "예약이 마감됐어요" : `${formatPrice(totalBeforePoints)} · 셔틀 예약하기`}
+          {soldOut ? t("booking.soldOut") : `${formatPrice(totalBeforePoints)} · ${t("booking.reserveCta")}`}
         </Button>
       </div>
 
@@ -901,27 +867,27 @@ export default function BookingPage({ tripId }: Props) {
           />
           <div className={`${FRAME_FIXED} bottom-0 z-50 rounded-t-2xl bg-background max-h-[80vh] flex flex-col`}>
             <div className="flex items-center justify-between px-4 py-3.5 border-b border-border">
-              <h3 className="font-bold">이용 지역 선택</h3>
+              <h3 className="font-bold">{t("booking.selectRegionSheet")}</h3>
               <button type="button" onClick={() => setRegionSheetOpen(false)} className="p-1 text-muted-foreground">
                 <X className="h-5 w-5" />
               </button>
             </div>
             <div className="overflow-y-auto px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
               {(siblingTrips ?? [])
-                .filter((t) => t.status !== "cancelled")
-                .map((t) => {
-                  const stops = pointsByTrip.get(t.id) ?? [];
-                  const full = t.availability.remaining <= 0;
+                .filter((st) => st.status !== "cancelled")
+                .map((st) => {
+                  const stops = pointsByTrip.get(st.id) ?? [];
+                  const full = st.availability.remaining <= 0;
                   if (stops.length === 0) return null;
                   return (
-                    <div key={t.id} className="py-3">
+                    <div key={st.id} className="py-3">
                       <p className="text-xs font-semibold text-muted-foreground mb-2">
-                        {chipDateLabel(t.departureAt)} {formatTime(t.departureAt)} 출발
-                        {full && " · 만석"}
+                        {chipDateLabel(st.departureAt, intlTag)} {formatTime(st.departureAt)} {t("booking.departSuffix")}
+                        {full && t("booking.departFull")}
                       </p>
                       <div className="space-y-1.5">
                         {stops.map((bp) => {
-                          const isCurrent = bp.id === selectedBp?.id && t.id === selectedTripId;
+                          const isCurrent = bp.id === selectedBp?.id && st.id === selectedTripId;
                           return (
                             <div
                               key={bp.id}
@@ -933,7 +899,7 @@ export default function BookingPage({ tripId }: Props) {
                                 <p className="text-sm font-medium truncate">{bp.name}</p>
                                 {bp.address && <p className="text-[11px] text-muted-foreground truncate">{bp.address}</p>}
                                 {bp.pickupTime && (
-                                  <p className="text-[11px] text-primary">픽업 {formatTime(bp.pickupTime)}</p>
+                                  <p className="text-[11px] text-primary">{t("eventDetail.pickup", { time: formatTime(bp.pickupTime) })}</p>
                                 )}
                               </div>
                               <Button
@@ -942,12 +908,12 @@ export default function BookingPage({ tripId }: Props) {
                                 className="flex-shrink-0"
                                 disabled={full}
                                 onClick={() => {
-                                  switchTrip(t.id);
+                                  switchTrip(st.id);
                                   setSelectedBpId(bp.id);
                                   setRegionSheetOpen(false);
                                 }}
                               >
-                                {full ? "만석" : isCurrent ? "선택됨" : "예약"}
+                                {full ? t("booking.full") : isCurrent ? t("booking.selected") : t("eventDetail.reserve")}
                               </Button>
                             </div>
                           );
@@ -957,7 +923,7 @@ export default function BookingPage({ tripId }: Props) {
                   );
                 })}
               {(allPoints ?? []).length === 0 && (
-                <p className="py-10 text-center text-sm text-muted-foreground">등록된 탑승 장소가 없습니다.</p>
+                <p className="py-10 text-center text-sm text-muted-foreground">{t("booking.noStops")}</p>
               )}
             </div>
           </div>

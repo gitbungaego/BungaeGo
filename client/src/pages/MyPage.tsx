@@ -13,8 +13,8 @@ import {
   formatPrice,
   formatDateTime,
   formatDate,
-  RESERVATION_STATUS_LABELS,
 } from "@/lib/constants";
+import { useT } from "@/i18n";
 import {
   Bus,
   Calendar,
@@ -36,6 +36,7 @@ import { BoardingPass } from "@/components/BoardingPass";
 
 export default function MyPage() {
   const { user, isAuthenticated, loading } = useAuth();
+  const t = useT();
 
   if (loading) {
     return (
@@ -49,9 +50,9 @@ export default function MyPage() {
   if (!isAuthenticated) {
     return (
       <div className="py-20 text-center space-y-4">
-        <p className="text-muted-foreground">마이페이지를 보려면 로그인이 필요합니다.</p>
+        <p className="text-muted-foreground">{t("mypage.loginNeeded")}</p>
         <Button asChild className="bg-[#FEE500] hover:bg-[#FDD800] text-black">
-          <a href={getLoginUrl()}>카카오로 로그인</a>
+          <a href={getLoginUrl()}>{t("booking.kakaoLogin")}</a>
         </Button>
       </div>
     );
@@ -67,15 +68,15 @@ export default function MyPage() {
           <TabsList className="w-full mb-6">
             <TabsTrigger value="reservations" className="flex-1 gap-1.5">
               <Ticket className="h-3.5 w-3.5" />
-              예약 내역
+              {t("mypage.tabReservations")}
             </TabsTrigger>
             <TabsTrigger value="requests" className="flex-1 gap-1.5">
               <RouteIcon className="h-3.5 w-3.5" />
-              참가 신청
+              {t("mypage.tabRequests")}
             </TabsTrigger>
             <TabsTrigger value="points" className="flex-1 gap-1.5">
               <Star className="h-3.5 w-3.5" />
-              포인트
+              {t("mypage.tabPoints")}
             </TabsTrigger>
           </TabsList>
 
@@ -100,12 +101,12 @@ export default function MyPage() {
           >
             <span className="flex items-center gap-2">
               <MessageCircle className="h-4 w-4" />
-              카카오톡으로 문의하기
+              {t("mypage.kakaoAsk")}
             </span>
-            <span className="text-black/50 text-xs">1:1 채팅</span>
+            <span className="text-black/50 text-xs">{t("mypage.oneToOne")}</span>
           </a>
           <p className="text-center text-[11px] text-muted-foreground">
-            번개GO — 함께 타면 더 저렴하고, 더 빠르게 · © 2026 번개GO
+            {t("mypage.footer")}
           </p>
         </div>
       </div>
@@ -116,13 +117,14 @@ export default function MyPage() {
 // 프로필 카드 — 닉네임은 연필 아이콘으로 자유 수정. 실명/전화(카카오 수집)는 표시만.
 function ProfileCard() {
   const { user } = useAuth();
+  const t = useT();
   const utils = trpc.useUtils();
   const [editing, setEditing] = useState(false);
   const [nickname, setNickname] = useState("");
 
   const updateNickname = trpc.auth.updateNickname.useMutation({
     onSuccess: () => {
-      toast.success("닉네임이 변경되었습니다.");
+      toast.success(t("mypage.nickChanged"));
       setEditing(false);
       utils.auth.me.invalidate();
     },
@@ -137,7 +139,7 @@ function ProfileCard() {
   const save = () => {
     const trimmed = nickname.trim();
     if (!trimmed) {
-      toast.error("닉네임을 입력해주세요.");
+      toast.error(t("mypage.nickEmpty"));
       return;
     }
     updateNickname.mutate({ name: trimmed });
@@ -151,13 +153,13 @@ function ProfileCard() {
         </div>
         <div className="min-w-0 flex-1">
           <h1 className="text-xl font-bold flex items-center gap-1.5">
-            <span className="truncate">{user?.name ?? "사용자"}</span>
+            <span className="truncate">{user?.name ?? t("header.user")}</span>
             {!editing && (
               <button
                 type="button"
                 onClick={startEdit}
                 className="p-1 text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
-                aria-label="닉네임 수정"
+                aria-label={t("mypage.editNick")}
               >
                 <Pencil className="h-3.5 w-3.5" />
               </button>
@@ -182,7 +184,7 @@ function ProfileCard() {
             onChange={(e) => setNickname(e.target.value)}
             maxLength={30}
             className="h-11 text-base"
-            placeholder="새 닉네임 입력 (30자 이내)"
+            placeholder={t("mypage.nickPh")}
             autoFocus
             onKeyDown={(e) => {
               if (e.key === "Enter") save();
@@ -191,10 +193,10 @@ function ProfileCard() {
           />
           <div className="flex gap-2">
             <Button className="flex-1" onClick={save} disabled={updateNickname.isPending}>
-              {updateNickname.isPending ? "저장 중…" : "저장"}
+              {updateNickname.isPending ? t("common.saving") : t("common.save")}
             </Button>
             <Button variant="outline" className="flex-1" onClick={() => setEditing(false)}>
-              취소
+              {t("common.cancel")}
             </Button>
           </div>
         </div>
@@ -204,6 +206,7 @@ function ProfileCard() {
 }
 
 function ReservationsTab() {
+  const t = useT();
   const { data: reservations, isLoading, refetch } = trpc.reservations.myList.useQuery();
   // 탑승권 — 결제 완료 + 출발 전 예약을 핸디버스식 티켓으로 목록 최상단에.
   const { data: tickets } = trpc.reservations.myTickets.useQuery();
@@ -211,7 +214,7 @@ function ReservationsTab() {
 
   const cancelReservation = trpc.reservations.cancel.useMutation({
     onSuccess: () => {
-      toast.success("예약이 취소되었습니다.");
+      toast.success(t("mypage.resCancelled"));
       utils.reservations.myList.invalidate();
     },
     onError: (err) => toast.error(err.message),
@@ -219,7 +222,7 @@ function ReservationsTab() {
 
   const hideReservation = trpc.reservations.hide.useMutation({
     onSuccess: () => {
-      toast.success("내역이 삭제되었습니다.");
+      toast.success(t("mypage.histDeleted"));
       utils.reservations.myList.invalidate();
     },
     onError: (err) => toast.error(err.message),
@@ -237,9 +240,9 @@ function ReservationsTab() {
     return (
       <div className="text-center py-16 text-muted-foreground">
         <Bus className="h-10 w-10 mx-auto mb-3 opacity-20" />
-        <p className="font-medium">예약 내역이 없습니다</p>
+        <p className="font-medium">{t("mypage.noReservations")}</p>
         <Button variant="outline" size="sm" className="mt-4" asChild>
-          <Link href="/events">이벤트 보러 가기</Link>
+          <Link href="/events">{t("mypage.goEvents")}</Link>
         </Button>
       </div>
     );
@@ -263,6 +266,7 @@ function ReservationsTab() {
 }
 
 function ReservationCard({ reservation, onCancel, cancelling, onHide, hiding }: { reservation: any; onCancel: (id: number) => void; cancelling: boolean; onHide: (id: number) => void; hiding: boolean }) {
+  const t = useT();
   const { data: trip } = trpc.trips.byId.useQuery({ id: reservation.tripId });
   const { data: event } = trpc.events.byId.useQuery(
     { id: trip?.eventId ?? 0 },
@@ -290,13 +294,13 @@ function ReservationCard({ reservation, onCancel, cancelling, onHide, hiding }: 
     <div className="rounded-xl border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="min-w-0">
-          <p className="font-semibold text-sm truncate">{event?.title ?? "이벤트 로딩 중..."}</p>
+          <p className="font-semibold text-sm truncate">{event?.title ?? t("mypage.loadingEvent")}</p>
           <p className="text-xs text-muted-foreground mt-0.5">
-            예약 #{reservation.id} · {reservation.seats}명
+            {t("mypage.resNo", { id: reservation.id })} · {t("common.seats", { n: reservation.seats })}
           </p>
         </div>
         <Badge variant="outline" className={`text-xs border flex-shrink-0 ${statusColors[reservation.status] ?? ""}`}>
-          {RESERVATION_STATUS_LABELS[reservation.status] ?? reservation.status}
+          {t(`resv.${reservation.status}`)}
         </Badge>
       </div>
 
@@ -318,8 +322,8 @@ function ReservationCard({ reservation, onCancel, cancelling, onHide, hiding }: 
             <p className="text-xs text-muted-foreground">
               {cancellation.allowed
                 ? cancellation.feeRate > 0
-                  ? `취소 수수료 ${cancellation.feeRate * 100}% · 예상 환불액 ${formatPrice(expectedRefund)}`
-                  : `수수료 없음 · 전액 환불 ${formatPrice(expectedRefund)}`
+                  ? t("mypage.feeRefund", { pct: cancellation.feeRate * 100, amount: formatPrice(expectedRefund) })
+                  : t("mypage.noFeeRefund", { amount: formatPrice(expectedRefund) })
                 : cancellation.reason}
             </p>
             <Button
@@ -330,7 +334,7 @@ function ReservationCard({ reservation, onCancel, cancelling, onHide, hiding }: 
               disabled={cancelling || !cancellation.allowed}
             >
               <XCircle className="h-3.5 w-3.5 mr-1" />
-              예약 취소
+              {t("mypage.cancelBooking")}
             </Button>
           </div>
         </div>
@@ -344,7 +348,7 @@ function ReservationCard({ reservation, onCancel, cancelling, onHide, hiding }: 
           className="inline-flex items-center gap-1.5 rounded-lg bg-[#FEE500] px-3 py-1.5 text-xs font-medium text-black hover:brightness-95 transition-all"
         >
           <MessageCircle className="h-3.5 w-3.5" />
-          예약 관련 문의
+          {t("mypage.askBooking")}
         </a>
         {/* 취소/환불된 내역만 사용자가 목록에서 지울 수 있다 (소프트 숨김) */}
         {(reservation.status === "cancelled" || reservation.status === "refunded") && (
@@ -355,21 +359,13 @@ function ReservationCard({ reservation, onCancel, cancelling, onHide, hiding }: 
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
           >
             <Trash2 className="h-3.5 w-3.5" />
-            내역 삭제
+            {t("mypage.deleteHistory")}
           </button>
         )}
       </div>
     </div>
   );
 }
-
-const REQUEST_STATUS_LABELS: Record<string, string> = {
-  pending: "매칭 대기 중",
-  clustered: "매칭 진행 중",
-  route_confirmed: "배차 확정!",
-  boarded: "탑승 완료",
-  failed_refunded: "매칭 실패 (환불됨)",
-};
 
 const REQUEST_STATUS_COLORS: Record<string, string> = {
   pending: "bg-amber-50 text-amber-600 border-amber-200",
@@ -382,6 +378,7 @@ const REQUEST_STATUS_COLORS: Record<string, string> = {
 // 참가 신청 탭 — 이벤트 신청(미등록 행사 요청) + 셔틀 신청(희망 탑승지 수요) +
 // 자동매칭 참가 신청 + 찜한 이벤트를 한 곳에서 보여준다 (찜 탭 병합).
 function RideRequestsTab() {
+  const t = useT();
   const { data: requests, isLoading } = trpc.rideRequests.myList.useQuery();
   const { data: eventRequests, isLoading: erLoading } = trpc.eventRequests.myList.useQuery();
   const { data: demands, isLoading: sdLoading } = trpc.shuttleDemands.myList.useQuery();
@@ -390,7 +387,7 @@ function RideRequestsTab() {
 
   const cancelRequest = trpc.rideRequests.cancel.useMutation({
     onSuccess: () => {
-      toast.success("참가 신청이 취소되었습니다.");
+      toast.success(t("mypage.reqCancelled"));
       utils.rideRequests.myList.invalidate();
     },
     onError: (err) => toast.error(err.message),
@@ -398,7 +395,7 @@ function RideRequestsTab() {
 
   const deleteEventRequest = trpc.eventRequests.delete.useMutation({
     onSuccess: () => {
-      toast.success("이벤트 신청이 취소되었습니다.");
+      toast.success(t("mypage.evReqCancelled"));
       utils.eventRequests.myList.invalidate();
     },
     onError: (err) => toast.error(err.message),
@@ -406,7 +403,7 @@ function RideRequestsTab() {
 
   const removeDemand = trpc.shuttleDemands.remove.useMutation({
     onSuccess: () => {
-      toast.success("셔틀 신청이 취소되었습니다.");
+      toast.success(t("mypage.demandCancelled"));
       utils.shuttleDemands.myList.invalidate();
     },
     onError: (err) => toast.error(err.message),
@@ -430,10 +427,10 @@ function RideRequestsTab() {
   const quickActions = (
     <div className="grid grid-cols-2 gap-2">
       <Button variant="outline" size="sm" asChild>
-        <Link href="/event-request">이벤트 만들기</Link>
+        <Link href="/event-request">{t("home.eventRequest")}</Link>
       </Button>
       <Button variant="outline" size="sm" asChild>
-        <Link href="/demand">셔틀 만들기</Link>
+        <Link href="/demand">{t("home.demand")}</Link>
       </Button>
     </div>
   );
@@ -444,7 +441,7 @@ function RideRequestsTab() {
         {quickActions}
         <div className="text-center py-14 text-muted-foreground">
           <RouteIcon className="h-10 w-10 mx-auto mb-3 opacity-20" />
-          <p className="font-medium">신청·찜 내역이 없습니다</p>
+          <p className="font-medium">{t("mypage.noRequests")}</p>
         </div>
       </div>
     );
@@ -456,7 +453,7 @@ function RideRequestsTab() {
       {/* 이벤트 신청 (미등록 행사 요청서) */}
       {(eventRequests?.length ?? 0) > 0 && (
         <section>
-          <h3 className="text-sm font-semibold mb-2">이벤트 신청</h3>
+          <h3 className="text-sm font-semibold mb-2">{t("mypage.secEventReq")}</h3>
           <div className="space-y-2">
             {eventRequests!.map((r) => (
               <div key={r.id} className="rounded-xl border border-border bg-card p-4">
@@ -470,16 +467,16 @@ function RideRequestsTab() {
                   </div>
                   {r.status === "done" ? (
                     <Badge variant="outline" className="text-xs border bg-emerald-50 text-emerald-600 border-emerald-200 flex-shrink-0">
-                      처리완료
+                      {t("mypage.done")}
                     </Badge>
                   ) : (
                     <Badge variant="outline" className="text-xs border bg-amber-50 text-amber-600 border-amber-200 flex-shrink-0">
-                      검토 중
+                      {t("mypage.reviewing")}
                     </Badge>
                   )}
                 </div>
                 <div className="flex items-center justify-between mt-2">
-                  <span className="text-[11px] text-muted-foreground">{formatDate(r.createdAt)} 신청</span>
+                  <span className="text-[11px] text-muted-foreground">{t("mypage.appliedAt", { date: formatDate(r.createdAt) })}</span>
                   <button
                     type="button"
                     onClick={() => deleteEventRequest.mutate({ id: r.id })}
@@ -487,7 +484,7 @@ function RideRequestsTab() {
                     className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
-                    {r.status === "done" ? "내역 삭제" : "신청 취소"}
+                    {r.status === "done" ? t("mypage.deleteHistory") : t("mypage.cancelReq")}
                   </button>
                 </div>
               </div>
@@ -499,7 +496,7 @@ function RideRequestsTab() {
       {/* 셔틀 신청 (희망 탑승지 수요) */}
       {(demands?.length ?? 0) > 0 && (
         <section>
-          <h3 className="text-sm font-semibold mb-2">셔틀 신청</h3>
+          <h3 className="text-sm font-semibold mb-2">{t("mypage.secShuttleReq")}</h3>
           <div className="space-y-2">
             {demands!.map((d) => (
               <div key={d.id} className="rounded-xl border border-border bg-card p-4">
@@ -509,20 +506,19 @@ function RideRequestsTab() {
                       <p className="font-semibold text-sm truncate">{d.eventTitle}</p>
                       <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
                         <MapPin className="h-3 w-3 flex-shrink-0" />
-                        {d.stopLabel}
-                        {d.neighborhood ? ` (${d.neighborhood})` : ""} 출발 희망
+                        {t("mypage.stopHope", { stop: `${d.stopLabel}${d.neighborhood ? ` (${d.neighborhood})` : ""}` })}
                       </p>
                     </div>
                     <Badge variant="outline" className="text-xs border bg-blue-50 text-blue-600 border-blue-200 flex-shrink-0">
-                      수요 접수
+                      {t("mypage.demandReceived")}
                     </Badge>
                   </div>
                 </Link>
                 <div className="flex items-center justify-between mt-2">
-                  <span className="text-[11px] text-muted-foreground">{formatDate(d.createdAt)} 신청</span>
+                  <span className="text-[11px] text-muted-foreground">{t("mypage.appliedAt", { date: formatDate(d.createdAt) })}</span>
                   <div className="flex items-center gap-3">
                     <Link href={`/demand/${d.eventId}`} className="text-xs font-medium text-primary">
-                      변경
+                      {t("common.change")}
                     </Link>
                     <button
                       type="button"
@@ -531,7 +527,7 @@ function RideRequestsTab() {
                       className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
-                      신청 취소
+                      {t("mypage.cancelReq")}
                     </button>
                   </div>
                 </div>
@@ -544,7 +540,7 @@ function RideRequestsTab() {
       {/* 자동매칭 참가 신청 */}
       {(requests?.length ?? 0) > 0 && (
         <section>
-          <h3 className="text-sm font-semibold mb-2">참가 신청 (자동매칭)</h3>
+          <h3 className="text-sm font-semibold mb-2">{t("mypage.secAutoMatch")}</h3>
           <div className="space-y-3">
             {requests!.map((req) => (
               <RideRequestCard
@@ -562,7 +558,7 @@ function RideRequestsTab() {
       {(likedEvents?.length ?? 0) > 0 && (
         <section>
           <h3 className="text-sm font-semibold mb-2 flex items-center gap-1">
-            <Heart className="h-3.5 w-3.5 text-red-400" /> 찜한 이벤트
+            <Heart className="h-3.5 w-3.5 text-red-400" /> {t("mypage.secLiked")}
           </h3>
           <div className="space-y-2">
             {likedEvents!.map((event) => (
@@ -599,19 +595,20 @@ function RideRequestsTab() {
 }
 
 function RideRequestCard({ request, onCancel, cancelling }: { request: any; onCancel: (id: number) => void; cancelling: boolean }) {
+  const t = useT();
   const { data: event } = trpc.events.byId.useQuery({ id: request.eventId });
 
   return (
     <div className="rounded-xl border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="min-w-0">
-          <p className="font-semibold text-sm truncate">{event?.title ?? "이벤트 로딩 중..."}</p>
+          <p className="font-semibold text-sm truncate">{event?.title ?? t("mypage.loadingEvent")}</p>
           <p className="text-xs text-muted-foreground mt-0.5">
-            신청 #{request.id} · {request.seats}명
+            {t("mypage.reqNo", { id: request.id })} · {t("common.seats", { n: request.seats })}
           </p>
         </div>
         <Badge variant="outline" className={`text-xs border flex-shrink-0 ${REQUEST_STATUS_COLORS[request.status] ?? ""}`}>
-          {REQUEST_STATUS_LABELS[request.status] ?? request.status}
+          {t(`req.${request.status}`)}
         </Badge>
       </div>
 
@@ -635,7 +632,7 @@ function RideRequestCard({ request, onCancel, cancelling }: { request: any; onCa
             disabled={cancelling}
           >
             <XCircle className="h-3.5 w-3.5 mr-1" />
-            신청 취소
+            {t("mypage.cancelReq")}
           </Button>
         </div>
       )}
@@ -645,6 +642,7 @@ function RideRequestCard({ request, onCancel, cancelling }: { request: any; onCa
 
 // 포인트 탭 — 보유 포인트·내역과 추천 코드·적립 실적을 한 곳에 (탭 단순화).
 function PointsTab() {
+  const t = useT();
   const { data: balance } = trpc.points.myBalance.useQuery();
   const { data: history, isLoading } = trpc.points.myHistory.useQuery();
   const { data: codeData, isLoading: codeLoading } = trpc.referrals.myCode.useQuery();
@@ -657,38 +655,36 @@ function PointsTab() {
   const copyCode = () => {
     if (!codeData?.code) return;
     navigator.clipboard.writeText(codeData.code);
-    toast.success("추천 코드가 복사되었습니다!");
+    toast.success(t("mypage.codeCopied"));
   };
 
   const copyLink = () => {
     if (!shareUrl) return;
     navigator.clipboard.writeText(shareUrl);
-    toast.success("추천 링크가 복사되었습니다!");
+    toast.success(t("mypage.linkCopied"));
   };
 
   return (
     <div className="space-y-5">
       {/* 보유 포인트 */}
       <div className="rounded-xl bg-gradient-to-br from-primary to-purple-500 p-5 text-white">
-        <p className="text-sm text-white/80 mb-1">보유 포인트</p>
+        <p className="text-sm text-white/80 mb-1">{t("mypage.myPoints")}</p>
         <p className="text-3xl font-bold">{(balance?.balance ?? 0).toLocaleString()}P</p>
         <p className="text-xs text-white/60 mt-2">
-          1P = 1원으로 예약 시 사용 가능
+          {t("mypage.pointUse")}
           {balance?.expiresAt && (balance?.balance ?? 0) > 0 && (
-            <> · {formatDate(balance.expiresAt)} 소멸 예정</>
+            <> · {t("mypage.expireOn", { date: formatDate(balance.expiresAt) })}</>
           )}
         </p>
-        <p className="text-[11px] text-white/50 mt-1">새 적립이 생기면 전체 잔액의 유효기간이 365일 연장돼요.</p>
+        <p className="text-[11px] text-white/50 mt-1">{t("mypage.extendNote")}</p>
       </div>
 
       {/* 내 추천 코드 */}
       <div className="rounded-xl border border-border bg-card p-5 space-y-4">
         <div>
-          <h3 className="font-semibold mb-1">내 추천 코드</h3>
+          <h3 className="font-semibold mb-1">{t("mypage.myCode")}</h3>
           <p className="text-xs text-muted-foreground">
-            친구가 결제할 때 내 코드를 입력하고 그 셔틀이 운행 완료되면, 실결제액의{" "}
-            <b>2%</b>(같은 행사에 나도 참가 중이면 <b>5%</b>, 건당 최대 5,000P)가 적립돼요.
-            횟수 제한 없이 매 결제마다 적립!
+            {t("mypage.codeDesc")}
           </p>
         </div>
 
@@ -707,7 +703,7 @@ function PointsTab() {
 
         <Button variant="outline" className="w-full gap-2" onClick={copyLink}>
           <Share2 className="h-4 w-4" />
-          추천 링크 복사
+          {t("mypage.copyLink")}
         </Button>
       </div>
 
@@ -715,26 +711,25 @@ function PointsTab() {
       <div className="grid grid-cols-3 gap-2">
         <div className="rounded-xl border border-border bg-card px-2 py-3.5 text-center">
           <p className="text-xl font-bold text-amber-500">{stats?.pending ?? 0}</p>
-          <p className="text-xs text-muted-foreground mt-1 whitespace-nowrap">적립 예정</p>
+          <p className="text-xs text-muted-foreground mt-1 whitespace-nowrap">{t("mypage.pendingEarn")}</p>
         </div>
         <div className="rounded-xl border border-border bg-card px-2 py-3.5 text-center">
           <p className="text-xl font-bold text-emerald-600">{stats?.completed ?? 0}</p>
-          <p className="text-xs text-muted-foreground mt-1 whitespace-nowrap">적립 완료</p>
+          <p className="text-xs text-muted-foreground mt-1 whitespace-nowrap">{t("mypage.completedEarn")}</p>
         </div>
         <div className="rounded-xl border border-border bg-card px-2 py-3.5 text-center">
           <p className="text-xl font-bold text-primary">{(stats?.totalEarned ?? 0).toLocaleString()}P</p>
-          <p className="text-xs text-muted-foreground mt-1 whitespace-nowrap">누적 적립</p>
+          <p className="text-xs text-muted-foreground mt-1 whitespace-nowrap">{t("mypage.totalEarn")}</p>
         </div>
       </div>
 
       <p className="text-[11px] text-muted-foreground">
-        적립은 해당 셔틀 운행 완료 시 지급되며, 셔틀 무산·예약 취소 시에는 지급되지 않아요.
-        적립된 포인트는 마지막 적립일로부터 365일간 유효합니다.
+        {t("mypage.earnNote")}
       </p>
 
       {/* 포인트 내역 */}
       <div>
-        <h3 className="text-sm font-semibold mb-3">포인트 내역</h3>
+        <h3 className="text-sm font-semibold mb-3">{t("mypage.pointHistory")}</h3>
         {isLoading ? (
           <div className="space-y-2">
             {[1, 2, 3].map((i) => <Skeleton key={i} className="h-14 rounded-lg" />)}
@@ -754,7 +749,7 @@ function PointsTab() {
             ))}
           </div>
         ) : (
-          <p className="text-sm text-muted-foreground text-center py-8">포인트 내역이 없습니다.</p>
+          <p className="text-sm text-muted-foreground text-center py-8">{t("mypage.noPointHistory")}</p>
         )}
       </div>
     </div>

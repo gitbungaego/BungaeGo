@@ -4,6 +4,7 @@ import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { LocaleProvider } from "./i18n";
 import AppShell from "./components/AppShell";
 import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
@@ -75,21 +76,21 @@ function Router() {
       </Route>
       <Route path="/events/:id">
         {(params) => (
-          <AppShell title="이벤트" hideTabs>
+          <AppShell titleKey="title.event" hideTabs>
             <EventDetailPage id={Number(params.id)} />
           </AppShell>
         )}
       </Route>
       <Route path="/trips/:tripId/book">
         {(params) => (
-          <AppShell title="셔틀 예약" hideTabs>
+          <AppShell titleKey="title.booking" hideTabs>
             <BookingPage tripId={Number(params.tripId)} />
           </AppShell>
         )}
       </Route>
       <Route path="/reservations/:id/confirm">
         {(params) => (
-          <AppShell title="예약 확인" hideTabs>
+          <AppShell titleKey="title.bookingConfirm" hideTabs>
             <BookingConfirmPage reservationId={Number(params.id)} />
           </AppShell>
         )}
@@ -159,10 +160,12 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="light">
-        <TooltipProvider>
-          <Toaster position="top-center" richColors />
-          <Router />
-        </TooltipProvider>
+        <LocaleProvider>
+          <TooltipProvider>
+            <Toaster position="top-center" richColors />
+            <Router />
+          </TooltipProvider>
+        </LocaleProvider>
       </ThemeProvider>
     </ErrorBoundary>
   );

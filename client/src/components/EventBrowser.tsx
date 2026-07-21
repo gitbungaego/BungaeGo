@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Link } from "wouter";
 import { Bus, ChevronRight } from "lucide-react";
 import { CATEGORY_CHIPS, formatShortDate } from "@/lib/constants";
+import { useLocale, useT } from "@/i18n";
 
 /**
  * 카카오T 셔틀 스타일 이벤트 브라우저 조각들 — Home("모집중인 셔틀")과 /events가 공유.
@@ -29,6 +30,7 @@ export function CategoryIconChips({
   value: string;
   onChange: (key: string) => void;
 }) {
+  const t = useT();
   return (
     <div className="flex gap-1 overflow-x-auto scrollbar-none -mx-4 px-4">
       {CATEGORY_CHIPS.map((c) => {
@@ -48,7 +50,7 @@ export function CategoryIconChips({
               {c.emoji}
             </span>
             <span className={`text-[11px] ${active ? "font-bold text-primary" : "text-muted-foreground"}`}>
-              {c.label}
+              {t(`cat.${c.key}`)}
             </span>
           </button>
         );
@@ -81,8 +83,15 @@ export function MonthChips({
   value: string;
   onChange: (key: string) => void;
 }) {
+  const t = useT();
+  const { intlTag } = useLocale();
   const months = useMemo(() => deriveMonthKeys(events), [events]);
-  const chips = [{ key: "popular", label: "인기" }, ...months.map((m) => ({ key: m, label: `${m.split("-")[1]}월` }))];
+  // 월 이름은 로케일별 짧은 표기(9월/Sep/9月/9月/9月)로 — Intl 사용.
+  const monthLabel = (m: string) => {
+    const [y, mm] = m.split("-").map(Number);
+    return new Date(y, mm - 1, 1).toLocaleDateString(intlTag, { month: "short" });
+  };
+  const chips = [{ key: "popular", label: t("month.popular") }, ...months.map((m) => ({ key: m, label: monthLabel(m) }))];
   return (
     <div className="flex gap-1.5 overflow-x-auto scrollbar-none -mx-4 px-4">
       {chips.map((c) => {

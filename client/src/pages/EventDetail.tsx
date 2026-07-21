@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  CATEGORY_LABELS,
   formatDate,
   formatPrice,
   formatTime,
@@ -13,6 +12,7 @@ import { Bus, Calendar, MapPin } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { MapView, createArrivalMarker, createBoardingPointMarker } from "@/components/Map";
 import { FRAME_FIXED } from "@/components/AppShell";
+import { useT } from "@/i18n";
 import { HeartButton } from "@/components/HeartButton";
 import { PointInterestSection } from "@/components/PointInterestSection";
 import { KAKAO_CHANNEL_CHAT_URL } from "@/const";
@@ -22,14 +22,15 @@ interface Props {
   id: number;
 }
 
-function tripStatusChip(status: string, remaining: number): { label: string; className: string } {
-  if (status === "confirmed") return { label: "확정", className: "bg-emerald-50 text-emerald-600 border-emerald-200" };
-  if (status === "cancelled") return { label: "취소됨", className: "bg-red-50 text-red-500 border-red-200" };
-  if (remaining <= 0) return { label: "마감", className: "bg-gray-100 text-gray-500 border-gray-200" };
-  return { label: "모집중", className: "bg-amber-50 text-amber-600 border-amber-200" };
+function tripStatusChip(status: string, remaining: number): { labelKey: string; className: string } {
+  if (status === "confirmed") return { labelKey: "trip.confirmed", className: "bg-emerald-50 text-emerald-600 border-emerald-200" };
+  if (status === "cancelled") return { labelKey: "trip.cancelled", className: "bg-red-50 text-red-500 border-red-200" };
+  if (remaining <= 0) return { labelKey: "trip.full", className: "bg-gray-100 text-gray-500 border-gray-200" };
+  return { labelKey: "trip.collecting", className: "bg-amber-50 text-amber-600 border-amber-200" };
 }
 
 export default function EventDetailPage({ id }: Props) {
+  const t = useT();
   const [, navigate] = useLocation();
   const { data: event, isLoading: eventLoading } = trpc.events.byId.useQuery({ id });
   const { data: trips, isLoading: tripsLoading } = trpc.trips.byEventId.useQuery({ eventId: id });
@@ -170,7 +171,7 @@ export default function EventDetailPage({ id }: Props) {
   }
 
   if (!event) {
-    return <div className="py-20 text-center text-muted-foreground">이벤트를 찾을 수 없습니다.</div>;
+    return <div className="py-20 text-center text-muted-foreground">{t("eventDetail.notFound")}</div>;
   }
 
   const hasTrips = (trips?.length ?? 0) > 0;
@@ -195,7 +196,7 @@ export default function EventDetailPage({ id }: Props) {
 
             <div className="absolute bottom-4 left-4 right-4">
               <Badge variant="outline" className="mb-2 bg-white/90 border-0 text-xs font-medium">
-                {CATEGORY_LABELS[event.category] ?? event.category}
+                {t(`cat.${event.category}`)}
               </Badge>
               <h1 className="text-white text-xl sm:text-2xl font-bold leading-tight drop-shadow-sm">{event.title}</h1>
               <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-white/90 text-sm">
@@ -238,7 +239,7 @@ export default function EventDetailPage({ id }: Props) {
 
         {/* ── Block 3: Stop-centric list ── */}
         <div ref={stopListRef} className="scroll-mt-4">
-          <h2 className="text-lg font-semibold mb-3">탑승 정류장</h2>
+          <h2 className="text-lg font-semibold mb-3">{t("eventDetail.stops")}</h2>
 
           {tripsLoading ? (
             <div className="space-y-3">
@@ -266,11 +267,11 @@ export default function EventDetailPage({ id }: Props) {
                     >
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="text-sm">{trip.mode === "bus" ? "🚌" : "🚐"}</span>
-                        <span className="text-sm font-semibold whitespace-nowrap">{formatTime(trip.departureAt)} 출발</span>
-                        <Badge variant="outline" className={`text-[11px] border ${chip.className}`}>{chip.label}</Badge>
+                        <span className="text-sm font-semibold whitespace-nowrap">{t("eventDetail.depart", { time: formatTime(trip.departureAt) })}</span>
+                        <Badge variant="outline" className={`text-[11px] border ${chip.className}`}>{t(chip.labelKey)}</Badge>
                       </div>
                       <div className="flex items-center gap-2 flex-shrink-0">
-                        <span className="text-xs text-muted-foreground tabular-nums">{trip.currentCount}/{trip.minCount}명</span>
+                        <span className="text-xs text-muted-foreground tabular-nums">{t("eventDetail.count", { cur: trip.currentCount, min: trip.minCount })}</span>
                         <span className="text-sm font-bold text-primary whitespace-nowrap">{formatPrice(trip.price)}</span>
                       </div>
                     </button>
@@ -295,7 +296,7 @@ export default function EventDetailPage({ id }: Props) {
                               <div className="min-w-0 flex-1">
                                 <p className="text-sm font-medium truncate">{bp.name}</p>
                                 {bp.pickupTime && (
-                                  <p className="text-xs text-muted-foreground">픽업 {formatTime(bp.pickupTime)}</p>
+                                  <p className="text-xs text-muted-foreground">{t("eventDetail.pickup", { time: formatTime(bp.pickupTime) })}</p>
                                 )}
                               </div>
                               <Button
@@ -304,16 +305,16 @@ export default function EventDetailPage({ id }: Props) {
                                 disabled={isFull}
                                 onClick={() => navigate(`/trips/${trip.id}/book?bp=${bp.id}`)}
                               >
-                                {isFull ? "마감" : "예약"}
+                                {isFull ? t("trip.full") : t("eventDetail.reserve")}
                               </Button>
                             </div>
                           );
                         })
                       ) : (
                         <div className="flex items-center justify-between gap-3 px-4 py-3">
-                          <p className="text-sm text-muted-foreground">정류장 정보 준비 중</p>
+                          <p className="text-sm text-muted-foreground">{t("eventDetail.stopPending")}</p>
                           <Button size="sm" disabled={isFull} onClick={() => navigate(`/trips/${trip.id}/book`)}>
-                            {isFull ? "마감" : "예약"}
+                            {isFull ? t("trip.full") : t("eventDetail.reserve")}
                           </Button>
                         </div>
                       )}
@@ -325,9 +326,9 @@ export default function EventDetailPage({ id }: Props) {
           ) : (
             <div className="text-center py-14 text-muted-foreground border border-dashed border-border rounded-2xl">
               <Bus className="h-10 w-10 mx-auto mb-3 opacity-20" />
-              <p className="text-sm">아직 등록된 셔틀이 없어요</p>
+              <p className="text-sm">{t("eventDetail.noTrips")}</p>
               <Button variant="outline" size="sm" className="mt-3" asChild>
-                <Link href="/create">셔틀 만들기</Link>
+                <Link href="/create">{t("eventDetail.createShuttle")}</Link>
               </Button>
             </div>
           )}
@@ -335,14 +336,14 @@ export default function EventDetailPage({ id }: Props) {
           <PointInterestSection eventId={event.id} />
 
           <p className="mt-6 text-center text-xs text-muted-foreground">
-            궁금한 점이 있나요?{" "}
+            {t("eventDetail.question")}{" "}
             <a
               href={KAKAO_CHANNEL_CHAT_URL}
               target="_blank"
               rel="noopener"
               className="font-medium text-black underline decoration-[#FEE500] decoration-2 underline-offset-2 hover:bg-[#FEE500]/40 rounded px-0.5 transition-colors"
             >
-              카카오톡으로 문의하기
+              {t("eventDetail.kakaoAsk")}
             </a>
           </p>
         </div>
@@ -356,7 +357,7 @@ export default function EventDetailPage({ id }: Props) {
             className="w-full text-base font-semibold"
             onClick={() => stopListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
           >
-            예약하기 · {formatPrice(lowestPrice)}~
+            {t("eventDetail.bookCta")} · {formatPrice(lowestPrice)}~
           </Button>
         </div>
       )}
