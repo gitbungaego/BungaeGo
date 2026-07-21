@@ -19,9 +19,10 @@ function EventBusIcon({ className }: { className?: string }) {
   return <img src="/bus.png" alt="" aria-hidden="true" className={`${className ?? ""} object-contain`} />;
 }
 
-// 번개팅 탭 — 원래 번개GO 로고(노란 버스 + 번개 표식) 이미지.
+// 번개팅 탭 — 번개GO 로고(노란 버스 + 번개 표식). 번개셔틀 아이콘과 동일하게
+// 여백을 트림한 버전(bus-bolt.png)이라 탭에서 크기가 맞는다.
 function BungaetingLogoIcon({ className }: { className?: string }) {
-  return <img src="/logo.png" alt="" aria-hidden="true" className={`${className ?? ""} object-contain`} />;
+  return <img src="/bus-bolt.png" alt="" aria-hidden="true" className={`${className ?? ""} object-contain`} />;
 }
 
 /**
