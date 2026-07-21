@@ -10,9 +10,34 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { CalendarDays, Check, ChevronLeft, Globe, Home, PlusCircle, Sparkles, User } from "lucide-react";
+import { Check, ChevronLeft, Globe, Home, PlusCircle, User } from "lucide-react";
 import { useLocale, useT } from "@/i18n";
 import { LOCALES } from "@/i18n/locales";
+
+// 번개GO 로고 색(노란 버스).
+const LOGO_YELLOW = "#F6B500";
+
+// 이벤트 탭 — 번개GO 로고에서 번개(⚡)만 뺀 버스 마크(눈·미소·다리 포함).
+function EventBusIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
+      <rect x="4.5" y="3" width="15" height="16.5" rx="3.4" fill={LOGO_YELLOW} />
+      <rect x="4.5" y="10.7" width="15" height="1.1" fill="#fff" />
+      <circle cx="9" cy="14.4" r="1.3" fill="#fff" />
+      <circle cx="15" cy="14.4" r="1.3" fill="#fff" />
+      <path d="M9 16.5c1 1.25 5 1.25 6 0" stroke="#fff" strokeWidth="1.25" strokeLinecap="round" />
+      <rect x="7" y="19.3" width="1.7" height="2.3" rx="0.6" fill={LOGO_YELLOW} />
+      <rect x="9.1" y="19.3" width="1.7" height="2.3" rx="0.6" fill={LOGO_YELLOW} />
+      <rect x="13.2" y="19.3" width="1.7" height="2.3" rx="0.6" fill={LOGO_YELLOW} />
+      <rect x="15.3" y="19.3" width="1.7" height="2.3" rx="0.6" fill={LOGO_YELLOW} />
+    </svg>
+  );
+}
+
+// 번개팅 탭 — 원래 번개GO 로고(노란 버스 + 번개 표식) 이미지.
+function BungaetingLogoIcon({ className }: { className?: string }) {
+  return <img src="/logo.png" alt="" aria-hidden="true" className={`${className ?? ""} object-contain`} />;
+}
 
 /**
  * 앱 셸 — 웹 전체를 "모바일 앱"처럼 보이게 하는 폰 프레임 레이아웃.
@@ -28,12 +53,12 @@ export const FRAME_FIXED = `fixed inset-x-0 mx-auto w-full ${FRAME_MAX_W}`;
 const bungaetingEnabled = import.meta.env.VITE_FEATURE_BUNGAETING === "true";
 
 // ── 하단 탭바 ──────────────────────────────────────────────────────────────────
-const TABS = [
+const TABS: { href: string; labelKey: string; icon: React.ComponentType<{ className?: string }>; exact: boolean }[] = [
   { href: "/", labelKey: "nav.home", icon: Home, exact: true },
-  { href: "/events", labelKey: "nav.events", icon: CalendarDays, exact: false },
+  { href: "/events", labelKey: "nav.events", icon: EventBusIcon, exact: false },
   // 만들기 = 셔틀 만들기(수요 모집). 실제 이벤트/셔틀 개설(/create)은 관리자 전용.
   { href: "/demand", labelKey: "nav.create", icon: PlusCircle, exact: false },
-  ...(bungaetingEnabled ? [{ href: "/bungaeting", labelKey: "nav.bungaeting", icon: Sparkles, exact: false }] : []),
+  ...(bungaetingEnabled ? [{ href: "/bungaeting", labelKey: "nav.bungaeting", icon: BungaetingLogoIcon, exact: false }] : []),
   { href: "/mypage", labelKey: "nav.my", icon: User, exact: false },
 ];
 
